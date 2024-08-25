@@ -1,29 +1,29 @@
-"Gaussian Latent Variable Model"
+"Q-Exponential Latent Variable Model"
 
 import os
 import random
 import numpy as np
 import matplotlib.pylab as plt
 
+from sklearn.datasets import make_swiss_roll
 import torch
-from torchvision import datasets, transforms
-from torch.utils.data import DataLoader
+from torch.utils.data import TensorDataset, DataLoader
 import tqdm
 
 # gpytorch imports
 import sys
 sys.path.insert(0,'../GPyTorch')
 import gpytorch
-from gpytorch.models.gplvm.latent_variable import *
-from gpytorch.models.gplvm.bayesian_gplvm import BayesianGPLVM
+from gpytorch.models.qeplvm.latent_variable import *
+from gpytorch.models.qeplvm.bayesian_qeplvm import BayesianQEPLVM
 from gpytorch.means import ZeroMean
 from gpytorch.mlls import VariationalELBO
-from gpytorch.priors import NormalPrior
-from gpytorch.likelihoods import GaussianLikelihood
+from gpytorch.priors import QExponentialPrior
+from gpytorch.likelihoods import QExponentialLikelihood
 from gpytorch.variational import VariationalStrategy
 from gpytorch.variational import CholeskyVariationalDistribution
 from gpytorch.kernels import ScaleKernel, RBFKernel
-from gpytorch.distributions import MultivariateNormal
+from gpytorch.distributions import MultivariateQExponential
 
 # Setting manual seed for reproducibility
 seed=2024
@@ -35,33 +35,27 @@ torch.cuda.manual_seed_all(seed)
 # set device
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-# load data
-def dataset_with_indices(cls):
-    """
-    Modifies the given Dataset class to return a tuple data, target, index
-    instead of just data, target.
-    https://discuss.pytorch.org/t/how-to-retrieve-the-sample-indices-of-a-mini-batch/7948/19
-    """
+q = 2.5
+POWER = torch.tensor(q, device=device)
 
-    def __getitem__(self, index):
-        data, target = cls.__getitem__(self, index)
-        return data, target, index
-
-    return type(cls.__name__, (cls,), {
-        '__getitem__': __getitem__,
-    })
-transform=transforms.Compose([
-    transforms.ToTensor(),
-    transforms.Normalize((0.1307,), (0.3081,)),
-    ])
-# train_dataset = datasets.MNIST('./data/MNIST', train=True, download=True, transform=transform)
-train_dataset = dataset_with_indices(datasets.MNIST)('./data/MNIST', train=True, download=True, transform=transform)
-test_dataset = datasets.MNIST('./data/MNIST', train=False, download=True, transform=transform)
-
-Y = train_dataset.data.flatten(1)
-labels = train_dataset.targets
+# create data
+n_samples = 1000
+sr_points, sr_color = make_swiss_roll(n_samples=n_samples, noise=0.05, random_state=0)
+Y, t = torch.tensor(sr_points), torch.tensor(sr_color)
+train_dataset = TensorDataset(Y, t, torch.arange(n_samples))
 batch_size = 256
 train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+
+# fig = plt.figure(figsize=(8, 8))
+# ax = fig.add_subplot(111, projection="3d")
+# fig.add_axes(ax)
+# ax.scatter(
+#     sr_points[:, 0], sr_points[:, 1], sr_points[:, 2], c=sr_color, alpha=0.8
+# )
+# # ax.set_title("Swiss Roll", fontsize=18)# in Ambient Space")
+# ax.view_init(azim=-66, elev=12)
+# os.makedirs('./results', exist_ok=True)
+# plt.savefig(os.path.join('./results','SwissRoll.png'),bbox_inches='tight')
 
 # define model
 def _init_pca(Y, latent_dim):
@@ -69,8 +63,9 @@ def _init_pca(Y, latent_dim):
     return torch.nn.Parameter(torch.matmul(Y, V[:,:latent_dim]))
 
 
-class bGPLVM(BayesianGPLVM):
+class bQEPLVM(BayesianQEPLVM):
     def __init__(self, n, data_dim, latent_dim, n_inducing, pca=False):
+        self.power = torch.tensor(POWER)
         self.n = n
         self.batch_shape = torch.Size([data_dim])
 
@@ -79,12 +74,12 @@ class bGPLVM(BayesianGPLVM):
         self.inducing_inputs = torch.randn(data_dim, n_inducing, latent_dim)
 
         # Sparse Variational Formulation (inducing variables initialised as randn)
-        q_u = CholeskyVariationalDistribution(n_inducing, batch_shape=self.batch_shape)
+        q_u = CholeskyVariationalDistribution(n_inducing, batch_shape=self.batch_shape, power=self.power)
         q_f = VariationalStrategy(self, self.inducing_inputs, q_u, learn_inducing_locations=True)
 
         # Define prior for X
         X_prior_mean = torch.zeros(n, latent_dim)  # shape: N x Q
-        prior_x = NormalPrior(X_prior_mean, torch.ones_like(X_prior_mean))
+        prior_x = QExponentialPrior(X_prior_mean, torch.ones_like(X_prior_mean), power=self.power)
 
         # Initialise X with PCA or randn
         if pca == True:
@@ -108,7 +103,7 @@ class bGPLVM(BayesianGPLVM):
     def forward(self, X):
         mean_x = self.mean_module(X)
         covar_x = self.covar_module(X)
-        dist = MultivariateNormal(mean_x, covar_x)
+        dist = MultivariateQExponential(mean_x, covar_x, power=self.power)
         return dist
 
     def _get_batch_idx(self, batch_size, seed=None):
@@ -120,15 +115,15 @@ class bGPLVM(BayesianGPLVM):
 
 N = len(Y)
 data_dim = Y.shape[1]
-latent_dim = 10
-n_inducing = 128
+latent_dim = data_dim
+n_inducing = 25
 pca = False
 
 # Model
-model = bGPLVM(N, data_dim, latent_dim, n_inducing, pca=pca)
+model = bQEPLVM(N, data_dim, latent_dim, n_inducing, pca=pca)
 
 # Likelihood
-likelihood = GaussianLikelihood(batch_shape=model.batch_shape)
+likelihood = QExponentialLikelihood(batch_shape=model.batch_shape, power=torch.tensor(POWER))
 
 # Declaring the objective to be optimised along with optimiser
 # (see models/latent_variable.py for how the additional loss terms are accounted for)
@@ -142,11 +137,10 @@ optimizer = torch.optim.Adam([
 # set device
 model = model.to(device)
 likelihood = likelihood.to(device)
+# mll = mll.to(device)
 
 # Training loop - optimises the objective wrt kernel hypers, variational params and inducing inputs
 # using the optimizer provided.
-model.train()
-likelihood.train()
 
 loss_list = []
 num_epochs = 10000
@@ -156,7 +150,6 @@ for epoch in iterator:
     batch_index = model._get_batch_idx(batch_size)
     optimizer.zero_grad()
     sample = model.sample_latent_variable()  # a full sample returns latent x across all N
-    sample.require_grad = False
     sample_batch = sample[batch_index]
     output_batch = model(sample_batch)
     loss = -mll(output_batch, Y[batch_index].to(device).T).sum()
@@ -184,37 +177,52 @@ values, indices = torch.topk(model.covar_module.base_kernel.lengthscale, k=2,lar
 
 l1, l2 = indices.detach().cpu().numpy().flatten()[:2]
 
-plt.figure(figsize=(20, 6))
-import matplotlib.colors as mcolors
-colors = list(mcolors.TABLEAU_COLORS.values())
-
 idx2plot = model._get_batch_idx(500, seed)
 X = model.X.q_mu.detach().cpu().numpy()[idx2plot]
-labels = labels[idx2plot]
+colors = t[idx2plot]
 
-plt.subplot(131)
-# std = torch.nn.functional.softplus(model.X.q_log_sigma).detach().numpy()
-# Select index of the smallest lengthscales by examining model.covar_module.base_kernel.lengthscales
-for i, label in enumerate(np.unique(labels)):
-    X_i = X[labels == label]
-    # scale_i = std[labels == label]
-    plt.scatter(X_i[:, l1], X_i[:, l2], c=[colors[i]], marker="$"+str(label)+"$")#label=label)
-    # plt.errorbar(X_i[:, l1], X_i[:, l2], xerr=scale_i[:,l1], yerr=scale_i[:,l2], label=label,c=colors[i], fmt='none')
-# plt.xlim([-1,1]); plt.ylim([-1,1])
-plt.title('2d latent subspace', fontsize=20)
-plt.xlabel('Latent dim 1', fontsize=20)
-plt.ylabel('Latent dim 2', fontsize=20)
-plt.tick_params(axis='both', which='major', labelsize=14)
+# plt.figure(figsize=(20, 6))
+# plt.subplot(131)
+# # std = torch.nn.functional.softplus(model.X.q_log_sigma).detach().numpy()
+# # Select index of the smallest lengthscales by examining model.covar_module.base_kernel.lengthscales
+# # for i, label in enumerate(np.unique(labels)):
+# #     X_i = X[labels == label]
+# #     # scale_i = std[labels == label]
+# #     # plt.scatter(X_i[:, l1], X_i[:, l2], c=[colors[i]], label=label)
+# #     plt.scatter(X_i[:, l1], X_i[:, l2], c=[colors[i]], marker="$"+str(label)+"$")
+# #     # plt.errorbar(X_i[:, l1], X_i[:, l2], xerr=scale_i[:,l1], yerr=scale_i[:,l2], label=label,c=colors[i], fmt='none')
+# plt.scatter(X[:, l1], X[:, l2], c=colors, alpha=0.8)
+# # plt.xlim([-1,1]); plt.ylim([-1,1])
+# plt.title('2d latent subspace', fontsize=20)
+# plt.xlabel('Latent dim 1', fontsize=20)
+# plt.ylabel('Latent dim 2', fontsize=20)
+# plt.tick_params(axis='both', which='major', labelsize=14)
+#
+# plt.subplot(132)
+# plt.bar(np.arange(latent_dim), height=inv_lengthscale.detach().cpu().numpy().flatten())
+# plt.title('Inverse Lengthscale of SE-ARD kernel', fontsize=18)
+# plt.tick_params(axis='both', which='major', labelsize=14)
+#
+# plt.subplot(133)
+# plt.plot(loss_list, label='batch_size='+str(batch_size))
+# plt.title('Neg. ELBO Loss', fontsize=20)
+# plt.tick_params(axis='both', which='major', labelsize=14)
+# # plt.show()
+# os.makedirs('./results', exist_ok=True)
+# plt.savefig(os.path.join('./results','swissroll_QEP-LVM_q'+str(q)+'.png'),bbox_inches='tight')
+#
+# fig = plt.figure(figsize=(8, 6))
+# plt.scatter(X[:, l1], X[:, l2], c=colors, alpha=0.8)
+# plt.title('q = '+str(q)+(' (Gaussian)' if q==2 else ''), fontsize=20)
+# plt.axis('square')
+# plt.xlabel('Latent dim 1', fontsize=18)
+# plt.ylabel('Latent dim 2', fontsize=18)
+# plt.tick_params(axis='both', which='major', labelsize=14)
+# plt.savefig(os.path.join('./results','swissroll_latent_QEP-LVM_q'+str(q)+'.png'),bbox_inches='tight')
 
-plt.subplot(132)
+fig = plt.figure(figsize=(8, 6))
 plt.bar(np.arange(latent_dim), height=inv_lengthscale.detach().cpu().numpy().flatten())
-plt.title('Inverse Lengthscale of SE-ARD kernel', fontsize=18)
+plt.title('Inverse Lengthscale of kernel', fontsize=20)
+plt.ylabel(' ', fontsize=18)
 plt.tick_params(axis='both', which='major', labelsize=14)
-
-plt.subplot(133)
-plt.plot(loss_list, label='batch_size='+str(batch_size))
-plt.title('Neg. ELBO Loss', fontsize=20)
-plt.tick_params(axis='both', which='major', labelsize=14)
-# plt.show()
-os.makedirs('./results', exist_ok=True)
-plt.savefig(os.path.join('./results','mnist_GP-LVM.png'),bbox_inches='tight')
+plt.savefig(os.path.join('./results','swissroll_latdim_QEP-LVM_q'+str(q)+'.png'),bbox_inches='tight')

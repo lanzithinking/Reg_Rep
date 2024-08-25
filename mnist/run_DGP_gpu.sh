@@ -2,8 +2,8 @@
 
 #SBATCH -N 1            # number of nodes
 #SBATCH -c 1            # number of cores 
-#SBATCH --mem=64G       # amount of RAM requested in GiB (2^40)
-#SBATCH -t 0-04:00:00   # time in d-hh:mm:ss
+#SBATCH --mem=128G       # amount of RAM requested in GiB (2^40)
+#SBATCH -t 0-02:00:00   # time in d-hh:mm:ss
 #SBATCH -p general      # partition 
 #SBATCH -q public       # QOS
 #SBATCH --gres=gpu:a100:1    # number of Request GPUs
@@ -26,5 +26,5 @@ cd ~/Projects/Reg_Rep/code/mnist
 
 # run python script
 
-python -u run_QEP_LVM.py #> QEP_LVM.log &
-# sbatch --job-name=QEPLVM --output=QEP_LVM.log run_QEPLVM_gpu.sh
+python -u run_Deep_GP.py #> Deep_GP.log &
+# sbatch --job-name=DeepGP --output=Deep_GP.log run_DGP_gpu.sh

@@ -7,6 +7,7 @@ import matplotlib.pylab as plt
 
 import torch
 from torchvision import datasets, transforms
+from torch.utils.data import DataLoader
 import tqdm
 
 # gpytorch imports
@@ -37,15 +38,36 @@ device = 'cuda' if torch.cuda.is_available() else 'cpu'
 POWER = torch.tensor(1.0, device=device)
 
 # load data
+def dataset_with_indices(cls):
+    """
+    Modifies the given Dataset class to return a tuple data, target, index
+    instead of just data, target.
+    https://discuss.pytorch.org/t/how-to-retrieve-the-sample-indices-of-a-mini-batch/7948/19
+    """
+
+    def __getitem__(self, index):
+        data, target = cls.__getitem__(self, index)
+        return data, target, index
+
+    return type(cls.__name__, (cls,), {
+        '__getitem__': __getitem__,
+    })
 transform=transforms.Compose([
     transforms.ToTensor(),
     transforms.Normalize((0.1307,), (0.3081,)),
     ])
-train_dataset = datasets.MNIST('./data/MNIST', train=True, download=True, transform=transform)
+transform=transforms.Compose([
+    transforms.ToTensor(),
+    transforms.Normalize((0.1307,), (0.3081,)),
+    ])
+# train_dataset = datasets.MNIST('./data/MNIST', train=True, download=True, transform=transform)
+train_dataset = dataset_with_indices(datasets.MNIST)('./data/MNIST', train=True, download=True, transform=transform)
 test_dataset = datasets.MNIST('./data/MNIST', train=False, download=True, transform=transform)
 
 Y = train_dataset.data.flatten(1)
 labels = train_dataset.targets
+batch_size = 256
+train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 
 # define model
 def _init_pca(Y, latent_dim):
@@ -73,7 +95,7 @@ class bQEPLVM(BayesianQEPLVM):
 
         # Initialise X with PCA or randn
         if pca == True:
-             X_init = _init_pca(Y, latent_dim) # Initialise X to PCA
+             X_init = _init_pca(Y.float(), latent_dim) # Initialise X to PCA
         else:
              X_init = torch.nn.Parameter(torch.randn(n, latent_dim))
 
@@ -107,7 +129,7 @@ N = len(Y)
 data_dim = Y.shape[1]
 latent_dim = 10
 n_inducing = 128
-pca = True
+pca = False
 
 # Model
 model = bQEPLVM(N, data_dim, latent_dim, n_inducing, pca=pca)
@@ -135,19 +157,29 @@ likelihood = likelihood.to(device)
 loss_list = []
 num_epochs = 10000
 iterator = tqdm.tqdm(range(num_epochs), desc="Epoch")
-batch_size = 256
-for i in iterator:
+# batch_size = 256
+for epoch in iterator:
     batch_index = model._get_batch_idx(batch_size)
     optimizer.zero_grad()
     sample = model.sample_latent_variable()  # a full sample returns latent x across all N
     sample_batch = sample[batch_index]
     output_batch = model(sample_batch)
     loss = -mll(output_batch, Y[batch_index].to(device).T).sum()
-    loss_list.append(loss.item())
-    # iterator.set_description('Loss: ' + str(float(np.round(loss.item(),2))) + ", iter no: " + str(i))
+    # minibatch_iter = tqdm.tqdm(train_loader, desc=f"(Epoch {epoch}) Minibatch")
+    # for data, target, batch_index in minibatch_iter:
+    #     if torch.cuda.is_available():
+    #         data = data.cuda()
+    #     optimizer.zero_grad()
+    #     sample = model.sample_latent_variable()
+    #     output_batch = model(sample[batch_index])
+    #     loss = -mll(output_batch, data.flatten(1).T).sum()
+    #     # loss_list.append(loss.item())
+    #     # iterator.set_description('Loss: ' + str(float(np.round(loss.item(),2))) + ", iter no: " + str(i))
     loss.backward()
     optimizer.step()
-    print('Epoch {}/{}: Loss: {}'.format(i, num_epochs, loss.item() ))
+        # minibatch_iter.set_postfix(loss=loss.item())
+    loss_list.append(loss.item())
+    print('Epoch {}/{}: Loss: {}'.format(epoch, num_epochs, loss.item() ))
 
 
 # plot results
@@ -161,7 +193,7 @@ plt.figure(figsize=(20, 6))
 import matplotlib.colors as mcolors
 colors = list(mcolors.TABLEAU_COLORS.values())
 
-idx2plot = model._get_batch_idx(1000, seed)
+idx2plot = model._get_batch_idx(500, seed)
 X = model.X.q_mu.detach().cpu().numpy()[idx2plot]
 labels = labels[idx2plot]
 
@@ -175,7 +207,7 @@ for i, label in enumerate(np.unique(labels)):
     plt.scatter(X_i[:, l1], X_i[:, l2], c=[colors[i]], marker="$"+str(label)+"$")
     # plt.errorbar(X_i[:, l1], X_i[:, l2], xerr=scale_i[:,l1], yerr=scale_i[:,l2], label=label,c=colors[i], fmt='none')
 # plt.xlim([-1,1]); plt.ylim([-1,1])
-plt.title('2d latent subspace', fontsize=20)# corresponding to 3 phase oilflow')
+plt.title('2d latent subspace', fontsize=20)
 plt.xlabel('Latent dim 1', fontsize=20)
 plt.ylabel('Latent dim 2', fontsize=20)
 plt.tick_params(axis='both', which='major', labelsize=14)
@@ -186,7 +218,7 @@ plt.title('Inverse Lengthscale of SE-ARD kernel', fontsize=18)
 plt.tick_params(axis='both', which='major', labelsize=14)
 
 plt.subplot(133)
-plt.plot(loss_list, label='batch_size=100')
+plt.plot(loss_list, label='batch_size='+str(batch_size))
 plt.title('Neg. ELBO Loss', fontsize=20)
 plt.tick_params(axis='both', which='major', labelsize=14)
 # plt.show()

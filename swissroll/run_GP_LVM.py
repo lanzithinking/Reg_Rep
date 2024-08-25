@@ -5,9 +5,9 @@ import random
 import numpy as np
 import matplotlib.pylab as plt
 
+from sklearn.datasets import make_swiss_roll
 import torch
-from torchvision import datasets, transforms
-from torch.utils.data import DataLoader
+from torch.utils.data import TensorDataset, DataLoader
 import tqdm
 
 # gpytorch imports
@@ -35,31 +35,11 @@ torch.cuda.manual_seed_all(seed)
 # set device
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-# load data
-def dataset_with_indices(cls):
-    """
-    Modifies the given Dataset class to return a tuple data, target, index
-    instead of just data, target.
-    https://discuss.pytorch.org/t/how-to-retrieve-the-sample-indices-of-a-mini-batch/7948/19
-    """
-
-    def __getitem__(self, index):
-        data, target = cls.__getitem__(self, index)
-        return data, target, index
-
-    return type(cls.__name__, (cls,), {
-        '__getitem__': __getitem__,
-    })
-transform=transforms.Compose([
-    transforms.ToTensor(),
-    transforms.Normalize((0.1307,), (0.3081,)),
-    ])
-# train_dataset = datasets.MNIST('./data/MNIST', train=True, download=True, transform=transform)
-train_dataset = dataset_with_indices(datasets.MNIST)('./data/MNIST', train=True, download=True, transform=transform)
-test_dataset = datasets.MNIST('./data/MNIST', train=False, download=True, transform=transform)
-
-Y = train_dataset.data.flatten(1)
-labels = train_dataset.targets
+# create data
+n_samples = 1000
+sr_points, sr_color = make_swiss_roll(n_samples=n_samples, noise=0.05, random_state=0)
+Y, t = torch.tensor(sr_points), torch.tensor(sr_color)
+train_dataset = TensorDataset(Y, t, torch.arange(n_samples))
 batch_size = 256
 train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 
@@ -120,8 +100,8 @@ class bGPLVM(BayesianGPLVM):
 
 N = len(Y)
 data_dim = Y.shape[1]
-latent_dim = 10
-n_inducing = 128
+latent_dim = data_dim
+n_inducing = 25
 pca = False
 
 # Model
@@ -185,21 +165,20 @@ values, indices = torch.topk(model.covar_module.base_kernel.lengthscale, k=2,lar
 l1, l2 = indices.detach().cpu().numpy().flatten()[:2]
 
 plt.figure(figsize=(20, 6))
-import matplotlib.colors as mcolors
-colors = list(mcolors.TABLEAU_COLORS.values())
 
 idx2plot = model._get_batch_idx(500, seed)
 X = model.X.q_mu.detach().cpu().numpy()[idx2plot]
-labels = labels[idx2plot]
+colors = t[idx2plot]
 
 plt.subplot(131)
-# std = torch.nn.functional.softplus(model.X.q_log_sigma).detach().numpy()
+# std = torch.nn.functional.softplus(model.X.q_log_sigma).detach().cpu().numpy()
 # Select index of the smallest lengthscales by examining model.covar_module.base_kernel.lengthscales
-for i, label in enumerate(np.unique(labels)):
-    X_i = X[labels == label]
-    # scale_i = std[labels == label]
-    plt.scatter(X_i[:, l1], X_i[:, l2], c=[colors[i]], marker="$"+str(label)+"$")#label=label)
-    # plt.errorbar(X_i[:, l1], X_i[:, l2], xerr=scale_i[:,l1], yerr=scale_i[:,l2], label=label,c=colors[i], fmt='none')
+# for i, label in enumerate(np.unique(labels)):
+#     X_i = X[labels == label]
+#     # scale_i = std[labels == label]
+#     plt.scatter(X_i[:, l1], X_i[:, l2], c=[colors[i]], marker="$"+str(label)+"$")#label=label)
+#     # plt.errorbar(X_i[:, l1], X_i[:, l2], xerr=scale_i[:,l1], yerr=scale_i[:,l2], label=label,c=colors[i], fmt='none')
+plt.scatter(X[:, l1], X[:, l2], c=colors, alpha=0.8)
 # plt.xlim([-1,1]); plt.ylim([-1,1])
 plt.title('2d latent subspace', fontsize=20)
 plt.xlabel('Latent dim 1', fontsize=20)
@@ -217,4 +196,4 @@ plt.title('Neg. ELBO Loss', fontsize=20)
 plt.tick_params(axis='both', which='major', labelsize=14)
 # plt.show()
 os.makedirs('./results', exist_ok=True)
-plt.savefig(os.path.join('./results','mnist_GP-LVM.png'),bbox_inches='tight')
+plt.savefig(os.path.join('./results','swissroll_GP-LVM.png'),bbox_inches='tight')

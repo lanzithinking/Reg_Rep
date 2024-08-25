@@ -3,7 +3,7 @@
 #SBATCH -N 1            # number of nodes
 #SBATCH -c 1            # number of cores 
 #SBATCH --mem=64G       # amount of RAM requested in GiB (2^40)
-#SBATCH -t 0-01:00:00   # time in d-hh:mm:ss
+#SBATCH -t 0-04:00:00   # time in d-hh:mm:ss
 #SBATCH -p general      # partition 
 #SBATCH -q public       # QOS
 #SBATCH --gres=gpu:a100:1    # number of Request GPUs
