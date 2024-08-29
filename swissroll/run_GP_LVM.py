@@ -136,7 +136,7 @@ for epoch in iterator:
     batch_index = model._get_batch_idx(batch_size)
     optimizer.zero_grad()
     sample = model.sample_latent_variable()  # a full sample returns latent x across all N
-    sample.require_grad = False
+    # sample.require_grad = False
     sample_batch = sample[batch_index]
     output_batch = model(sample_batch)
     loss = -mll(output_batch, Y[batch_index].to(device).T).sum()
@@ -167,7 +167,7 @@ l1, l2 = indices.detach().cpu().numpy().flatten()[:2]
 plt.figure(figsize=(20, 6))
 
 idx2plot = model._get_batch_idx(500, seed)
-X = model.X.q_mu.detach().cpu().numpy()[idx2plot]
+X = (model.X.q_mu if hasattr(model.X, 'q_mu') else model.X.X).detach().cpu().numpy()[idx2plot]
 colors = t[idx2plot]
 
 plt.subplot(131)

@@ -46,17 +46,6 @@ train_dataset = TensorDataset(Y, t, torch.arange(n_samples))
 batch_size = 256
 train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 
-# fig = plt.figure(figsize=(8, 8))
-# ax = fig.add_subplot(111, projection="3d")
-# fig.add_axes(ax)
-# ax.scatter(
-#     sr_points[:, 0], sr_points[:, 1], sr_points[:, 2], c=sr_color, alpha=0.8
-# )
-# # ax.set_title("Swiss Roll", fontsize=18)# in Ambient Space")
-# ax.view_init(azim=-66, elev=12)
-# os.makedirs('./results', exist_ok=True)
-# plt.savefig(os.path.join('./results','SwissRoll.png'),bbox_inches='tight')
-
 # define model
 def _init_pca(Y, latent_dim):
     U, S, V = torch.pca_lowrank(Y, q = latent_dim)
@@ -178,47 +167,47 @@ values, indices = torch.topk(model.covar_module.base_kernel.lengthscale, k=2,lar
 l1, l2 = indices.detach().cpu().numpy().flatten()[:2]
 
 idx2plot = model._get_batch_idx(500, seed)
-X = model.X.q_mu.detach().cpu().numpy()[idx2plot]
+X = (model.X.q_mu if hasattr(model.X, 'q_mu') else model.X.X).detach().cpu().numpy()[idx2plot]
 colors = t[idx2plot]
 
-# plt.figure(figsize=(20, 6))
-# plt.subplot(131)
-# # std = torch.nn.functional.softplus(model.X.q_log_sigma).detach().numpy()
-# # Select index of the smallest lengthscales by examining model.covar_module.base_kernel.lengthscales
-# # for i, label in enumerate(np.unique(labels)):
-# #     X_i = X[labels == label]
-# #     # scale_i = std[labels == label]
-# #     # plt.scatter(X_i[:, l1], X_i[:, l2], c=[colors[i]], label=label)
-# #     plt.scatter(X_i[:, l1], X_i[:, l2], c=[colors[i]], marker="$"+str(label)+"$")
-# #     # plt.errorbar(X_i[:, l1], X_i[:, l2], xerr=scale_i[:,l1], yerr=scale_i[:,l2], label=label,c=colors[i], fmt='none')
-# plt.scatter(X[:, l1], X[:, l2], c=colors, alpha=0.8)
-# # plt.xlim([-1,1]); plt.ylim([-1,1])
-# plt.title('2d latent subspace', fontsize=20)
-# plt.xlabel('Latent dim 1', fontsize=20)
-# plt.ylabel('Latent dim 2', fontsize=20)
-# plt.tick_params(axis='both', which='major', labelsize=14)
-#
-# plt.subplot(132)
-# plt.bar(np.arange(latent_dim), height=inv_lengthscale.detach().cpu().numpy().flatten())
-# plt.title('Inverse Lengthscale of SE-ARD kernel', fontsize=18)
-# plt.tick_params(axis='both', which='major', labelsize=14)
-#
-# plt.subplot(133)
-# plt.plot(loss_list, label='batch_size='+str(batch_size))
-# plt.title('Neg. ELBO Loss', fontsize=20)
-# plt.tick_params(axis='both', which='major', labelsize=14)
-# # plt.show()
-# os.makedirs('./results', exist_ok=True)
-# plt.savefig(os.path.join('./results','swissroll_QEP-LVM_q'+str(q)+'.png'),bbox_inches='tight')
-#
-# fig = plt.figure(figsize=(8, 6))
-# plt.scatter(X[:, l1], X[:, l2], c=colors, alpha=0.8)
-# plt.title('q = '+str(q)+(' (Gaussian)' if q==2 else ''), fontsize=20)
-# plt.axis('square')
-# plt.xlabel('Latent dim 1', fontsize=18)
-# plt.ylabel('Latent dim 2', fontsize=18)
-# plt.tick_params(axis='both', which='major', labelsize=14)
-# plt.savefig(os.path.join('./results','swissroll_latent_QEP-LVM_q'+str(q)+'.png'),bbox_inches='tight')
+plt.figure(figsize=(20, 6))
+plt.subplot(131)
+# std = torch.nn.functional.softplus(model.X.q_log_sigma).detach().numpy()
+# Select index of the smallest lengthscales by examining model.covar_module.base_kernel.lengthscales
+# for i, label in enumerate(np.unique(labels)):
+#     X_i = X[labels == label]
+#     # scale_i = std[labels == label]
+#     # plt.scatter(X_i[:, l1], X_i[:, l2], c=[colors[i]], label=label)
+#     plt.scatter(X_i[:, l1], X_i[:, l2], c=[colors[i]], marker="$"+str(label)+"$")
+#     # plt.errorbar(X_i[:, l1], X_i[:, l2], xerr=scale_i[:,l1], yerr=scale_i[:,l2], label=label,c=colors[i], fmt='none')
+plt.scatter(X[:, l1], X[:, l2], c=colors, alpha=0.8)
+# plt.xlim([-1,1]); plt.ylim([-1,1])
+plt.title('2d latent subspace', fontsize=20)
+plt.xlabel('Latent dim 1', fontsize=20)
+plt.ylabel('Latent dim 2', fontsize=20)
+plt.tick_params(axis='both', which='major', labelsize=14)
+
+plt.subplot(132)
+plt.bar(np.arange(latent_dim), height=inv_lengthscale.detach().cpu().numpy().flatten())
+plt.title('Inverse Lengthscale of SE-ARD kernel', fontsize=18)
+plt.tick_params(axis='both', which='major', labelsize=14)
+
+plt.subplot(133)
+plt.plot(loss_list, label='batch_size='+str(batch_size))
+plt.title('Neg. ELBO Loss', fontsize=20)
+plt.tick_params(axis='both', which='major', labelsize=14)
+# plt.show()
+os.makedirs('./results', exist_ok=True)
+plt.savefig(os.path.join('./results','swissroll_QEP-LVM_q'+str(q)+'.png'),bbox_inches='tight')
+
+fig = plt.figure(figsize=(8, 6))
+plt.scatter(X[:, l1], X[:, l2], c=colors, alpha=0.8)
+plt.title('q = '+str(q)+(' (Gaussian)' if q==2 else ''), fontsize=20)
+plt.axis('square')
+plt.xlabel('Latent dim 1', fontsize=18)
+plt.ylabel('Latent dim 2', fontsize=18)
+plt.tick_params(axis='both', which='major', labelsize=14)
+plt.savefig(os.path.join('./results','swissroll_latent_QEP-LVM_q'+str(q)+'.png'),bbox_inches='tight')
 
 fig = plt.figure(figsize=(8, 6))
 plt.bar(np.arange(latent_dim), height=inv_lengthscale.detach().cpu().numpy().flatten())
