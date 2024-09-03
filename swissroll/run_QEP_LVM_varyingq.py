@@ -23,7 +23,7 @@ from gpytorch.likelihoods import QExponentialLikelihood
 from gpytorch.variational import VariationalStrategy
 from gpytorch.variational import CholeskyVariationalDistribution
 from gpytorch.kernels import ScaleKernel, RBFKernel
-from gpytorch.distributions import MultivariateQExponential
+from gpytorch.distributions import MultivariateQExponential, Power
 
 # Setting manual seed for reproducibility
 seed=2024
@@ -35,8 +35,8 @@ torch.cuda.manual_seed_all(seed)
 # set device
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-q = 1.0
-POWER = torch.tensor(q, device=device)
+q = 2.0
+# POWER = torch.tensor(q, device=device)
 
 # create data
 n_samples = 1000
@@ -51,12 +51,12 @@ def _init_pca(Y, latent_dim):
     U, S, V = torch.pca_lowrank(Y, q = latent_dim)
     return torch.nn.Parameter(torch.matmul(Y, V[:,:latent_dim]))
 
-
 class bQEPLVM(BayesianQEPLVM):
-    def __init__(self, n, data_dim, latent_dim, n_inducing, pca=False):
-        self.power = torch.tensor(POWER)
+    def __init__(self, n, data_dim, latent_dim, n_inducing, pca=False, power_init=torch.tensor(1.0)):
+        super().__init__(None, None)
         self.n = n
         self.batch_shape = torch.Size([data_dim])
+        self.power = Power(power_init, power_prior=gpytorch.priors.GammaPrior(4.0, 2.0))
 
         # Locations Z_{d} corresponding to u_{d}, they can be randomly initialized or
         # regularly placed with shape (D x n_inducing x latent_dim).
@@ -68,7 +68,8 @@ class bQEPLVM(BayesianQEPLVM):
 
         # Define prior for X
         X_prior_mean = torch.zeros(n, latent_dim)  # shape: N x Q
-        prior_x = QExponentialPrior(X_prior_mean, torch.ones_like(X_prior_mean), power=self.power)
+        prior_x = QExponentialPrior(X_prior_mean, torch.ones_like(X_prior_mean))#, power=self.power.data)
+        prior_x.power = self.power
 
         # Initialise X with PCA or randn
         if pca == True:
@@ -77,17 +78,22 @@ class bQEPLVM(BayesianQEPLVM):
              X_init = torch.nn.Parameter(torch.randn(n, latent_dim))
 
         # LatentVariable (c)
-        X = VariationalLatentVariable(n, data_dim, latent_dim, X_init, prior_x)
+        X = VariationalLatentVariable(n, data_dim, latent_dim, X_init, prior_x, power=self.power)
 
         # For (a) or (b) change to below:
         # X = PointLatentVariable(n, latent_dim, X_init)
         # X = MAPLatentVariable(n, latent_dim, X_init, prior_x)
 
-        super().__init__(X, q_f)
+        # super().__init__(X, q_f)
+        self.X = X
+        self.variational_strategy = q_f
 
         # Kernel (acting on latent dimensions)
         self.mean_module = ZeroMean(ard_num_dims=latent_dim)
         self.covar_module = ScaleKernel(RBFKernel(ard_num_dims=latent_dim))
+        
+        # define likelihood
+        self.likelihood = QExponentialLikelihood(batch_shape=self.batch_shape, power=self.power)
 
     def forward(self, X):
         mean_x = self.mean_module(X)
@@ -107,25 +113,26 @@ data_dim = Y.shape[1]
 latent_dim = data_dim
 n_inducing = 25
 pca = False
+power_init = torch.tensor(q)
 
 # Model
-model = bQEPLVM(N, data_dim, latent_dim, n_inducing, pca=pca)
+model = bQEPLVM(N, data_dim, latent_dim, n_inducing, pca=pca, power_init=power_init)
 
 # Likelihood
-likelihood = QExponentialLikelihood(batch_shape=model.batch_shape, power=torch.tensor(POWER))
+# likelihood = QExponentialLikelihood(batch_shape=model.batch_shape, power=torch.tensor(POWER))
 
 # Declaring the objective to be optimised along with optimiser
 # (see models/latent_variable.py for how the additional loss terms are accounted for)
-mll = VariationalELBO(likelihood, model, num_data=len(Y))
+mll = VariationalELBO(model.likelihood, model, num_data=len(Y))
 
 optimizer = torch.optim.Adam([
     {'params': model.parameters()},
-    {'params': likelihood.parameters()}
+    # {'params': likelihood.parameters()}
 ], lr=0.01)
 
 # set device
 model = model.to(device)
-likelihood = likelihood.to(device)
+# likelihood = likelihood.to(device)
 # mll = mll.to(device)
 
 # Training loop - optimises the objective wrt kernel hypers, variational params and inducing inputs
@@ -150,24 +157,23 @@ for epoch in iterator:
     #     sample = model.sample_latent_variable()
     #     output_batch = model(sample[batch_index])
     #     loss = -mll(output_batch, data.flatten(1).T).sum()
-    #     # loss_list.append(loss.item())
-    #     # iterator.set_description('Loss: ' + str(float(np.round(loss.item(),2))) + ", iter no: " + str(i))
+        # loss_list.append(loss.item())
+        # iterator.set_description('Loss: ' + str(float(np.round(loss.item(),2))) + ", iter no: " + str(i))
     loss.backward()
     optimizer.step()
         # minibatch_iter.set_postfix(loss=loss.item())
     loss_list.append(loss.item())
-    print('Epoch {}/{}: Loss: {}'.format(epoch, num_epochs, loss.item() ))
+    print('Epoch {}/{}: Loss: {}, power: {}'.format(epoch, num_epochs, loss.item(), model.power.data.item()))
 
 
 # plot results
-
 inv_lengthscale = 1 / model.covar_module.base_kernel.lengthscale
 values, indices = torch.topk(model.covar_module.base_kernel.lengthscale, k=2,largest=False)
-
 l1, l2 = indices.detach().cpu().numpy().flatten()[:2]
+q = round(model.power.cpu().data.item(), 2)
 
 idx2plot = model._get_batch_idx(500, seed)
-X = (model.X.q_mu if hasattr(model.X, 'q_mu') else model.X.X).detach().cpu().numpy()[idx2plot]
+X = model.X.q_mu.detach().cpu().numpy()[idx2plot]
 colors = t[idx2plot]
 
 # plt.figure(figsize=(20, 6))
@@ -200,7 +206,7 @@ colors = t[idx2plot]
 # os.makedirs('./results', exist_ok=True)
 # plt.savefig(os.path.join('./results','swissroll_QEP-LVM_q'+str(q)+'.png'),bbox_inches='tight')
 
-fig = plt.figure(figsize=(7, 6))
+fig = plt.figure(figsize=(8, 6))
 plt.scatter(X[:, l1], X[:, l2], c=colors, alpha=0.8)
 plt.title('q = '+str(q)+(' (Gaussian)' if q==2 else ''), fontsize=20)
 # plt.axis('square')
@@ -209,7 +215,7 @@ plt.ylabel('Latent dim 2', fontsize=18)
 plt.tick_params(axis='both', which='major', labelsize=14)
 plt.savefig(os.path.join('./results','swissroll_latent_QEP-LVM_q'+str(q)+'.png'),bbox_inches='tight')
 
-fig = plt.figure(figsize=(7, 6))
+fig = plt.figure(figsize=(8, 6))
 plt.bar(np.arange(latent_dim), height=inv_lengthscale.detach().cpu().numpy().flatten())
 plt.title('Inverse Lengthscale of kernel', fontsize=20)
 plt.ylabel(' ', fontsize=18)
