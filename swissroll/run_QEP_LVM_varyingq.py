@@ -39,8 +39,9 @@ q = 2.0
 # POWER = torch.tensor(q, device=device)
 
 # create data
+dataset = {0:'swissroll',1:'swisshole'}[1]
 n_samples = 1000
-sr_points, sr_color = make_swiss_roll(n_samples=n_samples, noise=0.05, random_state=0)
+sr_points, sr_color = make_swiss_roll(n_samples=n_samples, noise=0.05, random_state=0, hole='hole' in dataset)
 Y, t = torch.tensor(sr_points), torch.tensor(sr_color)
 train_dataset = TensorDataset(Y, t, torch.arange(n_samples))
 batch_size = 256
@@ -130,42 +131,64 @@ optimizer = torch.optim.Adam([
     # {'params': likelihood.parameters()}
 ], lr=0.01)
 
-# set device
-model = model.to(device)
-# likelihood = likelihood.to(device)
-# mll = mll.to(device)
-
-# Training loop - optimises the objective wrt kernel hypers, variational params and inducing inputs
-# using the optimizer provided.
 
 loss_list = []
-num_epochs = 10000
-iterator = tqdm.tqdm(range(num_epochs), desc="Epoch")
-# batch_size = 256
-for epoch in iterator:
-    batch_index = model._get_batch_idx(batch_size)
-    optimizer.zero_grad()
-    sample = model.sample_latent_variable()  # a full sample returns latent x across all N
-    sample_batch = sample[batch_index]
-    output_batch = model(sample_batch)
-    loss = -mll(output_batch, Y[batch_index].to(device).T).sum()
-    # minibatch_iter = tqdm.tqdm(train_loader, desc=f"(Epoch {epoch}) Minibatch")
-    # for data, target, batch_index in minibatch_iter:
-    #     if torch.cuda.is_available():
-    #         data = data.cuda()
-    #     optimizer.zero_grad()
-    #     sample = model.sample_latent_variable()
-    #     output_batch = model(sample[batch_index])
-    #     loss = -mll(output_batch, data.flatten(1).T).sum()
-        # loss_list.append(loss.item())
-        # iterator.set_description('Loss: ' + str(float(np.round(loss.item(),2))) + ", iter no: " + str(i))
-    loss.backward()
-    optimizer.step()
-        # minibatch_iter.set_postfix(loss=loss.item())
-    loss_list.append(loss.item())
-    print('Epoch {}/{}: Loss: {}, power: {}'.format(epoch, num_epochs, loss.item(), model.power.data.item()))
+if os.path.exists(os.path.join('./results',dataset+'_qeplvm_varyingq_checkpoint.dat')):
+    state_dict = torch.load(os.path.join('./results',dataset+'_qeplvm_varyingq_checkpoint.dat'), map_location=device)['model']
+else:
+    # set device
+    model = model.to(device)
+    # likelihood = likelihood.to(device)
+    # mll = mll.to(device)
+    
+    # Training loop - optimises the objective wrt kernel hypers, variational params and inducing inputs
+    # using the optimizer provided.
+    model.train()
+    # likelihood.train()
+    
+    # loss_list = []
+    num_epochs = 10000
+    iterator = tqdm.tqdm(range(num_epochs), desc="Epoch")
+    # batch_size = 256
+    for epoch in iterator:
+        batch_index = model._get_batch_idx(batch_size)
+        optimizer.zero_grad()
+        sample = model.sample_latent_variable()  # a full sample returns latent x across all N
+        sample_batch = sample[batch_index]
+        output_batch = model(sample_batch)
+        loss = -mll(output_batch, Y[batch_index].to(device).T).sum()
+        # minibatch_iter = tqdm.tqdm(train_loader, desc=f"(Epoch {epoch}) Minibatch")
+        # for data, target, batch_index in minibatch_iter:
+        #     if torch.cuda.is_available():
+        #         data = data.cuda()
+        #     optimizer.zero_grad()
+        #     sample = model.sample_latent_variable()
+        #     output_batch = model(sample[batch_index])
+        #     loss = -mll(output_batch, data.flatten(1).T).sum()
+            # loss_list.append(loss.item())
+            # iterator.set_description('Loss: ' + str(float(np.round(loss.item(),2))) + ", iter no: " + str(i))
+        loss.backward()
+        optimizer.step()
+            # minibatch_iter.set_postfix(loss=loss.item())
+        loss_list.append(loss.item())
+        if epoch==0:
+            min_loss = loss_list[-1]
+            optim_model = model.state_dict()
+            optim_likelihood = model.likelihood.state_dict()
+        else:
+            if loss_list[-1] < min_loss:
+                min_loss = loss_list[-1]
+                optim_model = model.state_dict()
+                optim_likelihood = model.likelihood.state_dict()
+        print('Epoch {}/{}: Loss: {}, power: {}'.format(epoch, num_epochs, loss.item(), model.power.data.item()))
+    # save the model
+    state_dict = optim_model#.state_dict()
+    likelihood_state_dict = optim_likelihood#.state_dict()
+    torch.save({'model': state_dict, 'likelihood': likelihood_state_dict}, os.path.join('./results',dataset+'_qeplvm_varyingq_checkpoint.dat'))
 
-
+# load the best model
+model.load_state_dict(state_dict)
+model.eval()
 # plot results
 inv_lengthscale = 1 / model.covar_module.base_kernel.lengthscale
 values, indices = torch.topk(model.covar_module.base_kernel.lengthscale, k=2,largest=False)
@@ -176,35 +199,26 @@ idx2plot = model._get_batch_idx(500, seed)
 X = model.X.q_mu.detach().cpu().numpy()[idx2plot]
 colors = t[idx2plot]
 
-# plt.figure(figsize=(20, 6))
-# plt.subplot(131)
-# # std = torch.nn.functional.softplus(model.X.q_log_sigma).detach().numpy()
-# # Select index of the smallest lengthscales by examining model.covar_module.base_kernel.lengthscales
-# # for i, label in enumerate(np.unique(labels)):
-# #     X_i = X[labels == label]
-# #     # scale_i = std[labels == label]
-# #     # plt.scatter(X_i[:, l1], X_i[:, l2], c=[colors[i]], label=label)
-# #     plt.scatter(X_i[:, l1], X_i[:, l2], c=[colors[i]], marker="$"+str(label)+"$")
-# #     # plt.errorbar(X_i[:, l1], X_i[:, l2], xerr=scale_i[:,l1], yerr=scale_i[:,l2], label=label,c=colors[i], fmt='none')
-# plt.scatter(X[:, l1], X[:, l2], c=colors, alpha=0.8)
-# # plt.xlim([-1,1]); plt.ylim([-1,1])
-# plt.title('2d latent subspace', fontsize=20)
-# plt.xlabel('Latent dim 1', fontsize=20)
-# plt.ylabel('Latent dim 2', fontsize=20)
-# plt.tick_params(axis='both', which='major', labelsize=14)
-#
-# plt.subplot(132)
-# plt.bar(np.arange(latent_dim), height=inv_lengthscale.detach().cpu().numpy().flatten())
-# plt.title('Inverse Lengthscale of SE-ARD kernel', fontsize=18)
-# plt.tick_params(axis='both', which='major', labelsize=14)
-#
-# plt.subplot(133)
-# plt.plot(loss_list, label='batch_size='+str(batch_size))
-# plt.title('Neg. ELBO Loss', fontsize=20)
-# plt.tick_params(axis='both', which='major', labelsize=14)
-# # plt.show()
-# os.makedirs('./results', exist_ok=True)
-# plt.savefig(os.path.join('./results','swissroll_QEP-LVM_q'+str(q)+'.png'),bbox_inches='tight')
+# plot
+plt.figure(figsize=(20, 6))
+plt.subplot(131)
+plt.scatter(X[:, l1], X[:, l2], c=colors, alpha=0.8)
+# plt.xlim([-1,1]); plt.ylim([-1,1])
+plt.title('2d latent subspace', fontsize=20)
+plt.xlabel('Latent dim 1', fontsize=20)
+plt.ylabel('Latent dim 2', fontsize=20)
+plt.tick_params(axis='both', which='major', labelsize=14)
+plt.subplot(132)
+plt.bar(np.arange(latent_dim), height=inv_lengthscale.detach().cpu().numpy().flatten())
+plt.title('Inverse Lengthscale of kernel', fontsize=20)
+plt.tick_params(axis='both', which='major', labelsize=14)
+plt.subplot(133)
+plt.plot(loss_list, label='batch_size='+str(batch_size))
+plt.title('Neg. ELBO Loss', fontsize=20)
+plt.tick_params(axis='both', which='major', labelsize=14)
+# plt.show()
+os.makedirs('./results', exist_ok=True)
+plt.savefig(os.path.join('./results',dataset+'_QEP-LVM_q'+str(q)+'.png'),bbox_inches='tight')
 
 fig = plt.figure(figsize=(8, 6))
 plt.scatter(X[:, l1], X[:, l2], c=colors, alpha=0.8)
@@ -213,11 +227,58 @@ plt.title('q = '+str(q)+(' (Gaussian)' if q==2 else ''), fontsize=20)
 plt.xlabel('Latent dim 1', fontsize=18)
 plt.ylabel('Latent dim 2', fontsize=18)
 plt.tick_params(axis='both', which='major', labelsize=14)
-plt.savefig(os.path.join('./results','swissroll_latent_QEP-LVM_q'+str(q)+'.png'),bbox_inches='tight')
+plt.savefig(os.path.join('./results',dataset+'_latent_QEP-LVM_q'+str(q)+'.png'),bbox_inches='tight')
 
 fig = plt.figure(figsize=(8, 6))
 plt.bar(np.arange(latent_dim), height=inv_lengthscale.detach().cpu().numpy().flatten())
 plt.title('Inverse Lengthscale of kernel', fontsize=20)
 plt.ylabel(' ', fontsize=18)
 plt.tick_params(axis='both', which='major', labelsize=14)
-plt.savefig(os.path.join('./results','swissroll_latdim_QEP-LVM_q'+str(q)+'.png'),bbox_inches='tight')
+plt.savefig(os.path.join('./results',dataset+'_latdim_QEP-LVM_q'+str(q)+'.png'),bbox_inches='tight')
+
+# plot densities
+if 'sample' not in globals():
+    sample = model.sample_latent_variable()
+qs = np.linspace(0, 4, num=50, endpoint=False)
+qs += qs[1]
+from sklearn.metrics import auc
+def likelihood(qs, normalize=True):
+    ps = np.zeros_like(qs)
+    for i,q in enumerate(qs):
+        model.power.power = q
+        # ps[i] = model.likelihood.log_marginal(Y.to(device).T, model(sample)).mean()
+        ps[i] = model.likelihood.expected_log_prob(Y.to(device).T, model(sample)).mean()
+    ps = np.exp(ps-ps.max())
+    if normalize:
+        area = auc(qs, ps)
+        ps /= area
+    return ps
+def prior(qs, normalize=True):
+    ps = model.power.power_prior.log_prob(qs)
+    ps = np.exp(ps-ps.max())
+    if normalize:
+        area = auc(qs, ps)
+        ps /= area
+    return ps
+def posterior(qs, normalize=True):
+    ps = np.zeros_like(qs)
+    for i,q in enumerate(qs):
+        model.power.power = q
+        ps[i] = mll(model(sample), Y.to(device).T).mean()
+    ps = np.exp(ps-ps.max())
+    if normalize:
+        area = auc(qs, ps)
+        ps /= area
+    return ps
+fig = plt.figure(figsize=(7, 6))
+plt.plot(qs, likelihood(qs))
+plt.plot(qs, prior(qs))
+# plt.plot(qs, posterior(qs))
+plt.axvline(q, linewidth=3, color='red')
+plt.legend(labels=['likelihood', 'prior', 'MAP'], fontsize=14, frameon=False)
+# plt.legend(labels=['prior', 'posterior', 'MAP'], fontsize=14, frameon=False)
+plt.title('Posterior', fontsize=20)
+plt.xlabel('q', fontsize=18)
+plt.ylabel(' ', fontsize=18)
+plt.tick_params(axis='both', which='major', labelsize=14)
+plt.savefig(os.path.join('./results',dataset+'_densities_QEP-LVM_q'+str(q)+'.png'),bbox_inches='tight')

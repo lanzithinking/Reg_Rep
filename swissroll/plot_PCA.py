@@ -15,20 +15,21 @@ np.random.seed(seed)
 torch.manual_seed(seed)
 
 # create data
+dataset = {0:'swissroll',1:'swisshole'}[1]
 n_samples = 1000
-sr_points, sr_color = make_swiss_roll(n_samples=n_samples, noise=0.05, random_state=0)
+sr_points, sr_color = make_swiss_roll(n_samples=n_samples, noise=0.05, random_state=0, hole='hole' in dataset)
 Y, t = torch.tensor(sr_points), torch.tensor(sr_color)
 
-# fig = plt.figure(figsize=(8, 8))
-# ax = fig.add_subplot(111, projection="3d")
-# fig.add_axes(ax)
-# ax.scatter(
-#     sr_points[:, 0], sr_points[:, 1], sr_points[:, 2], c=sr_color, alpha=0.8
-# )
-# # ax.set_title("Swiss Roll", fontsize=18)# in Ambient Space")
-# ax.view_init(azim=-66, elev=12)
-# os.makedirs('./results', exist_ok=True)
-# plt.savefig(os.path.join('./results','SwissRoll.png'),bbox_inches='tight')
+fig = plt.figure(figsize=(8, 8))
+ax = fig.add_subplot(111, projection="3d")
+fig.add_axes(ax)
+ax.scatter(
+    sr_points[:, 0], sr_points[:, 1], sr_points[:, 2], c=sr_color, alpha=0.8
+)
+# ax.set_title("Swiss Roll", fontsize=18)# in Ambient Space")
+ax.view_init(azim=-66, elev=12)
+os.makedirs('./results', exist_ok=True)
+plt.savefig(os.path.join('./results',dataset+'.png'),bbox_inches='tight')
 
 def _pca(Y, latent_dim):
     U, S, V = torch.pca_lowrank(Y, q = latent_dim)
@@ -49,4 +50,4 @@ plt.axis('square')
 plt.xlabel('Principal dim 1', fontsize=18)
 plt.ylabel('Principal dim 2', fontsize=18)
 plt.tick_params(axis='both', which='major', labelsize=14)
-plt.savefig(os.path.join('./results','swissroll_pca.png'),bbox_inches='tight')
+plt.savefig(os.path.join('./results',dataset+'_pca.png'),bbox_inches='tight')

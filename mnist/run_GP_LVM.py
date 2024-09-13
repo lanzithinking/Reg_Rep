@@ -58,7 +58,7 @@ transform=transforms.Compose([
 train_dataset = dataset_with_indices(datasets.MNIST)('./data/MNIST', train=True, download=True, transform=transform)
 test_dataset = datasets.MNIST('./data/MNIST', train=False, download=True, transform=transform)
 
-Y = train_dataset.data.flatten(1)
+Y = train_dataset.data.flatten(1).float()
 labels = train_dataset.targets
 batch_size = 256
 train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
@@ -140,6 +140,7 @@ optimizer = torch.optim.Adam([
 ], lr=0.01)
 
 
+loss_list = []
 if os.path.exists(os.path.join('./results','gplvm_mnist_checkpoint.dat')):
     state_dict = torch.load(os.path.join('./results','gplvm_mnist_checkpoint.dat'), map_location=device)['model']
 else:
@@ -153,7 +154,7 @@ else:
     likelihood.train()
     
     os.makedirs('./results', exist_ok=True)
-    loss_list = []
+    # loss_list = []
     num_epochs = 10000
     iterator = tqdm.tqdm(range(num_epochs), desc="Epoch")
     # batch_size = 256
@@ -202,6 +203,7 @@ inv_lengthscale = 1 / model.covar_module.base_kernel.lengthscale
 values, indices = torch.topk(model.covar_module.base_kernel.lengthscale, k=2,largest=False)
 l1, l2 = indices.detach().cpu().numpy().flatten()[:2]
 X = model.X.q_mu.detach().cpu().numpy()
+labels = labels.numpy()
 
 # plot 
 import matplotlib.colors as mcolors
@@ -215,15 +217,15 @@ colors = list(mcolors.TABLEAU_COLORS.values())
 # for c in cls2plot:
 #     idx2plot.append(np.random.default_rng(seed).choice(np.where(labels==c)[0], size=num_pcls, replace=False))
 # idx2plot = np.concatenate(idx2plot)
-# X = X[idx2plot]
-# labels = labels[idx2plot]
+# X_ = X[idx2plot]
+# labels_ = labels[idx2plot]
 #
 # plt.subplot(131)
-# # std = torch.nn.functional.softplus(model.X.q_log_sigma).detach().numpy()
+# # std_ = torch.nn.functional.softplus(model.X.q_log_sigma).detach().numpy()[idx2plot]
 # # Select index of the smallest lengthscales by examining model.covar_module.base_kernel.lengthscales
-# for i, label in enumerate(np.unique(labels)):
-#     X_i = X[labels == label]
-#     # scale_i = std[labels == label]
+# for i, label in enumerate(np.unique(labels_)):
+#     X_i = X_[labels_ == label]
+#     # scale_i = std_[labels_ == label]
 #     plt.scatter(X_i[:, l1], X_i[:, l2], c=[colors[i]], marker="$"+str(label)+"$")#label=label)
 #     # plt.errorbar(X_i[:, l1], X_i[:, l2], xerr=scale_i[:,l1], yerr=scale_i[:,l2], label=label,c=colors[i], fmt='none')
 # # plt.xlim([-1,1]); plt.ylim([-1,1])
@@ -243,17 +245,23 @@ colors = list(mcolors.TABLEAU_COLORS.values())
 # plt.savefig(os.path.join('./results','mnist_GP-LVM.png'),bbox_inches='tight')
 
 # plot pairs
+import pandas as pd
+import seaborn as sns
+dat2plot = pd.DataFrame(np.hstack((X[:,[l1,l2]],labels[:,None])),columns=['latdim_'+str(j) for j in range(2)]+['label'])
+dat2plot['label']=dat2plot['label'].astype(int)
 pairs = np.array([[0,6], [1,7], [2,3], [4,9], [5, 8]])
 num_pairs = len(pairs)
 num_pcls = 50
 fig, axes = plt.subplots(1,num_pairs, figsize=(21,4))
 for i, cls2plot in enumerate(pairs):
+    plt.sca(axes[i])
+    sns.kdeplot(data=dat2plot.iloc[np.where([lbl in cls2plot for lbl in labels])[0]], x='latdim_0', y='latdim_1', hue='label', palette=[colors[c] for c in cls2plot], fill=True, alpha=.5, legend=False)
     for c in cls2plot:
         idx = np.random.default_rng(seed).choice(np.where(labels==c)[0], size=num_pcls, replace=False)
         axes[i].scatter(X[idx, l1], X[idx, l2], c=[colors[c]], marker="$"+str(c)+"$")
     axes[i].set_title('2d latent of '+np.array2string(cls2plot,separator=','), fontsize=18)
     axes[i].set_xlabel('Latent dim 1', fontsize=16)
-    if i==0: axes[i].set_ylabel('Latent dim 2', fontsize=16)
+    axes[i].set_ylabel('Latent dim 2' if i==0 else '', fontsize=16)
     # axes[i].tick_params(axis='both', which='major', labelsize=12)
 plt.subplots_adjust(wspace=0.15, hspace=0.15)
 plt.savefig(os.path.join('./results','mnist_GP-LVM_latentpairs.png'),bbox_inches='tight')

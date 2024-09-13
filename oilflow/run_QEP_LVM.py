@@ -4,10 +4,10 @@ import os
 import random
 import numpy as np
 import matplotlib.pylab as plt
+import urllib.request
+import tarfile
 
 import torch
-from torchvision import datasets, transforms
-from torch.utils.data import DataLoader
 import tqdm
 
 # gpytorch imports
@@ -38,32 +38,18 @@ device = 'cuda' if torch.cuda.is_available() else 'cpu'
 POWER = torch.tensor(1.0, device=device)
 
 # load data
-def dataset_with_indices(cls):
-    """
-    Modifies the given Dataset class to return a tuple data, target, index
-    instead of just data, target.
-    https://discuss.pytorch.org/t/how-to-retrieve-the-sample-indices-of-a-mini-batch/7948/19
-    """
+if not (os.path.exists('DataTrn.txt') and os.path.exists('DataTrnLbls.txt')):
+    # download data
+    url = "http://staffwww.dcs.shef.ac.uk/people/N.Lawrence/resources/3PhData.tar.gz"
+    urllib.request.urlretrieve(url, '3PhData.tar.gz')
+    with tarfile.open('3PhData.tar.gz', 'r') as f:
+        f.extract('DataTrn.txt')
+        f.extract('DataTrnLbls.txt')
 
-    def __getitem__(self, index):
-        data, target = cls.__getitem__(self, index)
-        return data, target, index
-
-    return type(cls.__name__, (cls,), {
-        '__getitem__': __getitem__,
-    })
-transform=transforms.Compose([
-    transforms.ToTensor(),
-    transforms.Normalize((0.1307,), (0.3081,)),
-    ])
-# train_dataset = datasets.MNIST('./data/MNIST', train=True, download=True, transform=transform)
-train_dataset = dataset_with_indices(datasets.MNIST)('./data/MNIST', train=True, download=True, transform=transform)
-test_dataset = datasets.MNIST('./data/MNIST', train=False, download=True, transform=transform)
-
-Y = train_dataset.data.flatten(1).float()
-labels = train_dataset.targets
-batch_size = 256
-train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+Y = torch.Tensor(np.loadtxt(fname='DataTrn.txt'))
+labels = torch.Tensor(np.loadtxt(fname='DataTrnLbls.txt'))
+labels = (labels @ np.diag([1, 2, 3])).sum(axis=1)
+batch_size = 100
 
 # define model
 def _init_pca(Y, latent_dim):
@@ -91,12 +77,12 @@ class bQEPLVM(BayesianQEPLVM):
 
         # Initialise X with PCA or randn
         if pca == True:
-             X_init = _init_pca(Y.float(), latent_dim) # Initialise X to PCA
+             X_init = _init_pca(Y, latent_dim) # Initialise X to PCA
         else:
              X_init = torch.nn.Parameter(torch.randn(n, latent_dim))
 
         # LatentVariable (c)
-        X = VariationalLatentVariable(n, data_dim, latent_dim, X_init, prior_x, power=torch.tensor(2.0))
+        X = VariationalLatentVariable(n, data_dim, latent_dim, X_init, prior_x)
 
         # For (a) or (b) change to below:
         # X = PointLatentVariable(n, latent_dim, X_init)
@@ -114,17 +100,16 @@ class bQEPLVM(BayesianQEPLVM):
         dist = MultivariateQExponential(mean_x, covar_x, power=self.power)
         return dist
 
-    def _get_batch_idx(self, batch_size, seed=None):
+    def _get_batch_idx(self, batch_size):
         valid_indices = np.arange(self.n)
-        batch_indices = np.random.choice(valid_indices, size=batch_size, replace=False) if seed is None else \
-                        np.random.default_rng(seed).choice(valid_indices, size=batch_size, replace=False)
+        batch_indices = np.random.choice(valid_indices, size=batch_size, replace=False)
         return np.sort(batch_indices)
 
 
 N = len(Y)
 data_dim = Y.shape[1]
-latent_dim = 10
-n_inducing = 128
+latent_dim = data_dim
+n_inducing = 25
 pca = False
 
 # Model
@@ -142,14 +127,14 @@ optimizer = torch.optim.Adam([
     {'params': likelihood.parameters()}
 ], lr=0.01)
 
+
 loss_list = []
-if os.path.exists(os.path.join('./results','qeplvm_q'+str(POWER.cpu().item())+'_mnist_checkpoint.dat')):
-    state_dict = torch.load(os.path.join('./results','qeplvm_q'+str(POWER.cpu().item())+'_mnist_checkpoint.dat'), map_location=device)['model']
+if os.path.exists(os.path.join('./results','qeplvm_q'+str(POWER.cpu().item())+'_oilflow_checkpoint.dat')):
+    state_dict = torch.load(os.path.join('./results','qeplvm_q'+str(POWER.cpu().item())+'_oilflow_checkpoint.dat'), map_location=device)['model']
 else:
     # set device
     model = model.to(device)
     likelihood = likelihood.to(device)
-    # mll = mll.to(device)
     
     # Training loop - optimises the objective wrt kernel hypers, variational params and inducing inputs
     # using the optimizer provided.
@@ -157,10 +142,8 @@ else:
     likelihood.train()
     
     os.makedirs('./results', exist_ok=True)
-    # loss_list = []
     num_epochs = 10000
     iterator = tqdm.tqdm(range(num_epochs), desc="Epoch")
-    # batch_size = 256
     for epoch in iterator:
         batch_index = model._get_batch_idx(batch_size)
         optimizer.zero_grad()
@@ -168,20 +151,9 @@ else:
         sample_batch = sample[batch_index]
         output_batch = model(sample_batch)
         loss = -mll(output_batch, Y[batch_index].to(device).T).sum()
-        # minibatch_iter = tqdm.tqdm(train_loader, desc=f"(Epoch {epoch}) Minibatch")
-        # for data, target, batch_index in minibatch_iter:
-        #     if torch.cuda.is_available():
-        #         data = data.cuda()
-        #     optimizer.zero_grad()
-        #     sample = model.sample_latent_variable()
-        #     output_batch = model(sample[batch_index])
-        #     loss = -mll(output_batch, data.flatten(1).T).sum()
-        #     # loss_list.append(loss.item())
-        #     # iterator.set_description('Loss: ' + str(float(np.round(loss.item(),2))) + ", iter no: " + str(i))
+        # iterator.set_description('Loss: ' + str(float(np.round(loss.item(),2))) + ", iter no: " + str(i))
         loss.backward()
         optimizer.step()
-            # minibatch_iter.set_postfix(loss=loss.item())
-        # record the loss and the best model
         loss_list.append(loss.item())
         if epoch==0:
             min_loss = loss_list[-1]
@@ -196,16 +168,18 @@ else:
     # save the model
     state_dict = optim_model#.state_dict()
     likelihood_state_dict = optim_likelihood#.state_dict()
-    torch.save({'model': state_dict, 'likelihood': likelihood_state_dict}, os.path.join('./results','qeplvm_q'+str(POWER.cpu().item())+'_mnist_checkpoint.dat'))
+    torch.save({'model': state_dict, 'likelihood': likelihood_state_dict}, os.path.join('./results','qeplvm_q'+str(POWER.cpu().item())+'_oilflow_checkpoint.dat'))
 
 # load the best model
 model.load_state_dict(state_dict)
 model.eval()
+
 # plot results
 inv_lengthscale = 1 / model.covar_module.base_kernel.lengthscale
 values, indices = torch.topk(model.covar_module.base_kernel.lengthscale, k=2,largest=False)
 l1, l2 = indices.detach().cpu().numpy().flatten()[:2]
 X = model.X.q_mu.detach().cpu().numpy()
+std = torch.nn.functional.softplus(model.X.q_log_sigma).cpu().detach().numpy()
 labels = labels.numpy()
 
 # plot
@@ -213,59 +187,48 @@ import matplotlib.colors as mcolors
 colors = list(mcolors.TABLEAU_COLORS.values())
 
 # plt.figure(figsize=(20, 6))
-# # idx2plot = model._get_batch_idx(500, seed)
-# cls2plot = np.unique(labels)
-# num_pcls = 20
-# idx2plot = []
-# for c in cls2plot:
-#     idx2plot.append(np.random.default_rng(seed).choice(np.where(labels==c)[0], size=num_pcls, replace=False))
-# idx2plot = np.concatenate(idx2plot)
-# X_ = X[idx2plot]
-# labels_ = labels[idx2plot]
-#
 # plt.subplot(131)
-# # std_ = torch.nn.functional.softplus(model.X.q_log_sigma).detach().numpy()[idx2plot]
 # # Select index of the smallest lengthscales by examining model.covar_module.base_kernel.lengthscales
-# for i, label in enumerate(np.unique(labels_)):
-#     X_i = X_[labels_ == label]
-#     # scale_i = std_[labels_ == label]
-#     # plt.scatter(X_i[:, l1], X_i[:, l2], c=[colors[i]], label=label)
-#     plt.scatter(X_i[:, l1], X_i[:, l2], c=[colors[i]], marker="$"+str(label)+"$")
-#     # plt.errorbar(X_i[:, l1], X_i[:, l2], xerr=scale_i[:,l1], yerr=scale_i[:,l2], label=label,c=colors[i], fmt='none')
-# # plt.xlim([-1,1]); plt.ylim([-1,1])
-# plt.title('2d latent subspace', fontsize=20)
+# for i, label in enumerate(np.unique(labels)):
+#     X_i = X[labels == label]
+#     scale_i = std[labels == label]
+#     plt.scatter(X_i[:, l1], X_i[:, l2], c=[colors[i]], label=label)
+#     plt.errorbar(X_i[:, l1], X_i[:, l2], xerr=scale_i[:,l1], yerr=scale_i[:,l2], label=label,c=colors[i], fmt='none')
+# plt.title('2d latent subspace', fontsize=20)# corresponding to 3 phase oilflow')
 # plt.xlabel('Latent dim 1', fontsize=20)
 # plt.ylabel('Latent dim 2', fontsize=20)
 # plt.tick_params(axis='both', which='major', labelsize=14)
 # plt.subplot(132)
 # plt.bar(np.arange(latent_dim), height=inv_lengthscale.detach().cpu().numpy().flatten())
-# plt.title('Inverse Lengthscale of SE-ARD kernel', fontsize=18)
+# plt.title('Inverse Lengthscale of kernel', fontsize=20)
 # plt.tick_params(axis='both', which='major', labelsize=14)
 # plt.subplot(133)
-# plt.plot(loss_list, label='batch_size='+str(batch_size))
+# plt.plot(loss_list, label='batch_size=100')
 # plt.title('Neg. ELBO Loss', fontsize=20)
 # plt.tick_params(axis='both', which='major', labelsize=14)
 # # plt.show()
-# plt.savefig(os.path.join('./results','mnist_QEP-LVM_q'+str(POWER.cpu().item())+'.png'),bbox_inches='tight')
+# plt.savefig(os.path.join('./results','./oilflow_QEP-LVM_q'+str(POWER.cpu().item())+'.png'),bbox_inches='tight')
 
-# plot pairs
-import pandas as pd
-import seaborn as sns
-dat2plot = pd.DataFrame(np.hstack((X[:,[l1,l2]],labels[:,None])),columns=['latdim_'+str(j) for j in range(2)]+['label'])
-dat2plot['label']=dat2plot['label'].astype(int)
-pairs = np.array([[0,6], [1,7], [2,3], [4,9], [5, 8]])
-num_pairs = len(pairs)
-num_pcls = 50
-fig, axes = plt.subplots(1,num_pairs, figsize=(21,4))
-for i, cls2plot in enumerate(pairs):
-    plt.sca(axes[i])
-    sns.kdeplot(data=dat2plot.iloc[np.where([lbl in cls2plot for lbl in labels])[0]], x='latdim_0', y='latdim_1', hue='label', palette=[colors[c] for c in cls2plot], fill=True, alpha=.5, legend=False)
-    for c in cls2plot:
-        idx = np.random.default_rng(seed).choice(np.where(labels==c)[0], size=num_pcls, replace=False)
-        axes[i].scatter(X[idx, l1], X[idx, l2], c=[colors[c]], marker="$"+str(c)+"$")
-    axes[i].set_title('2d latent of '+np.array2string(cls2plot,separator=','), fontsize=18)
-    axes[i].set_xlabel('Latent dim 1', fontsize=16)
-    axes[i].set_ylabel('Latent dim 2' if i==0 else '', fontsize=16)
-    # axes[i].tick_params(axis='both', which='major', labelsize=12)
-plt.subplots_adjust(wspace=0.15, hspace=0.15)
-plt.savefig(os.path.join('./results','mnist_QEP-LVM_q'+str(POWER.cpu().item())+'_latentpairs.png'),bbox_inches='tight')
+plt.figure(figsize=(7, 6))
+# plt.contourf(X[:,l1], X[:,l2], 1/np.maximum(std[:,l1], std[:,[l2]]), cmap='gray', alpha=0.5)
+plt.contourf(X[:,l1], X[:,l2], np.sqrt(std[:,[l1]]**2 + std[:,l2]**2), cmap='gray', alpha=0.5)
+for i, label in enumerate(np.unique(labels)):
+    X_i = X[labels == label]
+    scale_i = std[labels == label]
+    plt.scatter(X_i[:, l1], X_i[:, l2], c=[colors[i]], label=label)
+# import pandas as pd
+# import seaborn as sns
+# dat2plot = pd.DataFrame(np.hstack((X[:,[l1,l2]],std[:,[l1,l2]], labels[:,None])),columns=['latdim_'+str(j) for j in range(2)]+['stddim_'+str(j) for j in range(2)]+['label'])
+# dat2plot['label']=dat2plot['label'].astype(int)
+# sns.relplot(data=dat2plot, x='latdim_0', y='latdim_1', hue='label', style='label', palette=colors[:len(np.unique(labels))], legend=False)
+plt.title('q = '+str(POWER.cpu().item())+(' (Gaussian)' if POWER.cpu().item()==2 else ''), fontsize=20)
+plt.xlabel('Latent dim 1', fontsize=20)
+plt.ylabel('Latent dim 2', fontsize=20)
+plt.tick_params(axis='both', which='major', labelsize=14)
+plt.savefig(os.path.join('./results','./oilflow_latent_QEP-LVM_q'+str(POWER.cpu().item())+'.png'),bbox_inches='tight')
+
+# plt.figure(figsize=(7, 6))
+# plt.bar(np.arange(latent_dim), height=inv_lengthscale.detach().cpu().numpy().flatten())
+# plt.title('Inverse Lengthscale of kernel', fontsize=20)
+# plt.tick_params(axis='both', which='major', labelsize=14)
+# plt.savefig(os.path.join('./results','./oilflow_latdim_QEP-LVM_q'+str(POWER.cpu().item())+'.png'),bbox_inches='tight')

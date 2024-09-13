@@ -23,7 +23,7 @@ from gpytorch.likelihoods import QExponentialLikelihood
 from gpytorch.variational import VariationalStrategy
 from gpytorch.variational import CholeskyVariationalDistribution
 from gpytorch.kernels import ScaleKernel, RBFKernel
-from gpytorch.distributions import MultivariateQExponential
+from gpytorch.distributions import MultivariateQExponential, Power
 
 # Setting manual seed for reproducibility
 seed=2024
@@ -35,7 +35,8 @@ torch.cuda.manual_seed_all(seed)
 # set device
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-POWER = torch.tensor(1.0, device=device)
+q = 2.0
+# POWER = torch.tensor(q, device=device)
 
 # load data
 def dataset_with_indices(cls):
@@ -61,6 +62,7 @@ train_dataset = dataset_with_indices(datasets.MNIST)('./data/MNIST', train=True,
 test_dataset = datasets.MNIST('./data/MNIST', train=False, download=True, transform=transform)
 
 Y = train_dataset.data.flatten(1).float()
+Y -= Y.mean(); Y /= Y.std()
 labels = train_dataset.targets
 batch_size = 256
 train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
@@ -72,10 +74,12 @@ def _init_pca(Y, latent_dim):
 
 
 class bQEPLVM(BayesianQEPLVM):
-    def __init__(self, n, data_dim, latent_dim, n_inducing, pca=False):
-        self.power = torch.tensor(POWER)
+    def __init__(self, n, data_dim, latent_dim, n_inducing, pca=False, power_init=torch.tensor(1.0)):
+        super().__init__(None, None)
         self.n = n
         self.batch_shape = torch.Size([data_dim])
+        self.power = Power(power_init, power_prior=gpytorch.priors.GammaPrior(4.0, 2.0))
+        # self.power = Power(power_init, power_prior=gpytorch.priors.GammaPrior(40, 20))
 
         # Locations Z_{d} corresponding to u_{d}, they can be randomly initialized or
         # regularly placed with shape (D x n_inducing x latent_dim).
@@ -87,7 +91,8 @@ class bQEPLVM(BayesianQEPLVM):
 
         # Define prior for X
         X_prior_mean = torch.zeros(n, latent_dim)  # shape: N x Q
-        prior_x = QExponentialPrior(X_prior_mean, torch.ones_like(X_prior_mean), power=self.power)
+        prior_x = QExponentialPrior(X_prior_mean, torch.ones_like(X_prior_mean), power=self.power.data)
+        prior_x.power = self.power
 
         # Initialise X with PCA or randn
         if pca == True:
@@ -96,17 +101,22 @@ class bQEPLVM(BayesianQEPLVM):
              X_init = torch.nn.Parameter(torch.randn(n, latent_dim))
 
         # LatentVariable (c)
-        X = VariationalLatentVariable(n, data_dim, latent_dim, X_init, prior_x, power=torch.tensor(2.0))
+        X = VariationalLatentVariable(n, data_dim, latent_dim, X_init, prior_x, power=self.power.data)
 
         # For (a) or (b) change to below:
         # X = PointLatentVariable(n, latent_dim, X_init)
         # X = MAPLatentVariable(n, latent_dim, X_init, prior_x)
 
-        super().__init__(X, q_f)
+        # super().__init__(X, q_f)
+        self.X = X
+        self.variational_strategy = q_f
 
         # Kernel (acting on latent dimensions)
         self.mean_module = ZeroMean(ard_num_dims=latent_dim)
         self.covar_module = ScaleKernel(RBFKernel(ard_num_dims=latent_dim))
+        
+        # define likelihood
+        self.likelihood = QExponentialLikelihood(batch_shape=self.batch_shape, power=self.power.data)
 
     def forward(self, X):
         mean_x = self.mean_module(X)
@@ -126,35 +136,36 @@ data_dim = Y.shape[1]
 latent_dim = 10
 n_inducing = 128
 pca = False
+power_init = torch.tensor(q)
 
 # Model
-model = bQEPLVM(N, data_dim, latent_dim, n_inducing, pca=pca)
+model = bQEPLVM(N, data_dim, latent_dim, n_inducing, pca=pca, power_init=power_init)
 
 # Likelihood
-likelihood = QExponentialLikelihood(batch_shape=model.batch_shape, power=torch.tensor(POWER))
+# likelihood = QExponentialLikelihood(batch_shape=model.batch_shape, power=model.power)
 
 # Declaring the objective to be optimised along with optimiser
 # (see models/latent_variable.py for how the additional loss terms are accounted for)
-mll = VariationalELBO(likelihood, model, num_data=len(Y))
+mll = VariationalELBO(model.likelihood, model, num_data=len(Y))
 
 optimizer = torch.optim.Adam([
     {'params': model.parameters()},
-    {'params': likelihood.parameters()}
+    # {'params': likelihood.parameters()}
 ], lr=0.01)
 
 loss_list = []
-if os.path.exists(os.path.join('./results','qeplvm_q'+str(POWER.cpu().item())+'_mnist_checkpoint.dat')):
-    state_dict = torch.load(os.path.join('./results','qeplvm_q'+str(POWER.cpu().item())+'_mnist_checkpoint.dat'), map_location=device)['model']
+if os.path.exists(os.path.join('./results','qeplvm_varyingq_mnist_checkpoint.dat')):
+    state_dict = torch.load(os.path.join('./results','qeplvm_varyingq_mnist_checkpoint.dat'), map_location=device)['model']
 else:
     # set device
     model = model.to(device)
-    likelihood = likelihood.to(device)
+    # likelihood = likelihood.to(device)
     # mll = mll.to(device)
     
     # Training loop - optimises the objective wrt kernel hypers, variational params and inducing inputs
     # using the optimizer provided.
     model.train()
-    likelihood.train()
+    # likelihood.train()
     
     os.makedirs('./results', exist_ok=True)
     # loss_list = []
@@ -176,8 +187,8 @@ else:
         #     sample = model.sample_latent_variable()
         #     output_batch = model(sample[batch_index])
         #     loss = -mll(output_batch, data.flatten(1).T).sum()
-        #     # loss_list.append(loss.item())
-        #     # iterator.set_description('Loss: ' + str(float(np.round(loss.item(),2))) + ", iter no: " + str(i))
+            # loss_list.append(loss.item())
+            # iterator.set_description('Loss: ' + str(float(np.round(loss.item(),2))) + ", iter no: " + str(i))
         loss.backward()
         optimizer.step()
             # minibatch_iter.set_postfix(loss=loss.item())
@@ -186,17 +197,17 @@ else:
         if epoch==0:
             min_loss = loss_list[-1]
             optim_model = model.state_dict()
-            optim_likelihood = likelihood.state_dict()
+            optim_likelihood = model.likelihood.state_dict()
         else:
             if loss_list[-1] < min_loss:
                 min_loss = loss_list[-1]
                 optim_model = model.state_dict()
-                optim_likelihood = likelihood.state_dict()
-        print('Epoch {}/{}: Loss: {}'.format(epoch, num_epochs, loss.item() ))
+                optim_likelihood = model.likelihood.state_dict()
+        print('Epoch {}/{}: Loss: {}, power: {}'.format(epoch, num_epochs, loss.item(), model.power.data.item() ))
     # save the model
     state_dict = optim_model#.state_dict()
     likelihood_state_dict = optim_likelihood#.state_dict()
-    torch.save({'model': state_dict, 'likelihood': likelihood_state_dict}, os.path.join('./results','qeplvm_q'+str(POWER.cpu().item())+'_mnist_checkpoint.dat'))
+    torch.save({'model': state_dict, 'likelihood': likelihood_state_dict}, os.path.join('./results','qeplvm_varyingq_mnist_checkpoint.dat'))
 
 # load the best model
 model.load_state_dict(state_dict)
@@ -207,46 +218,47 @@ values, indices = torch.topk(model.covar_module.base_kernel.lengthscale, k=2,lar
 l1, l2 = indices.detach().cpu().numpy().flatten()[:2]
 X = model.X.q_mu.detach().cpu().numpy()
 labels = labels.numpy()
+q = round(model.power.cpu().data.item(), 2)
 
 # plot
 import matplotlib.colors as mcolors
 colors = list(mcolors.TABLEAU_COLORS.values())
 
-# plt.figure(figsize=(20, 6))
-# # idx2plot = model._get_batch_idx(500, seed)
-# cls2plot = np.unique(labels)
-# num_pcls = 20
-# idx2plot = []
-# for c in cls2plot:
-#     idx2plot.append(np.random.default_rng(seed).choice(np.where(labels==c)[0], size=num_pcls, replace=False))
-# idx2plot = np.concatenate(idx2plot)
-# X_ = X[idx2plot]
-# labels_ = labels[idx2plot]
-#
-# plt.subplot(131)
-# # std_ = torch.nn.functional.softplus(model.X.q_log_sigma).detach().numpy()[idx2plot]
-# # Select index of the smallest lengthscales by examining model.covar_module.base_kernel.lengthscales
-# for i, label in enumerate(np.unique(labels_)):
-#     X_i = X_[labels_ == label]
-#     # scale_i = std_[labels_ == label]
-#     # plt.scatter(X_i[:, l1], X_i[:, l2], c=[colors[i]], label=label)
-#     plt.scatter(X_i[:, l1], X_i[:, l2], c=[colors[i]], marker="$"+str(label)+"$")
-#     # plt.errorbar(X_i[:, l1], X_i[:, l2], xerr=scale_i[:,l1], yerr=scale_i[:,l2], label=label,c=colors[i], fmt='none')
-# # plt.xlim([-1,1]); plt.ylim([-1,1])
-# plt.title('2d latent subspace', fontsize=20)
-# plt.xlabel('Latent dim 1', fontsize=20)
-# plt.ylabel('Latent dim 2', fontsize=20)
-# plt.tick_params(axis='both', which='major', labelsize=14)
-# plt.subplot(132)
-# plt.bar(np.arange(latent_dim), height=inv_lengthscale.detach().cpu().numpy().flatten())
-# plt.title('Inverse Lengthscale of SE-ARD kernel', fontsize=18)
-# plt.tick_params(axis='both', which='major', labelsize=14)
-# plt.subplot(133)
-# plt.plot(loss_list, label='batch_size='+str(batch_size))
-# plt.title('Neg. ELBO Loss', fontsize=20)
-# plt.tick_params(axis='both', which='major', labelsize=14)
-# # plt.show()
-# plt.savefig(os.path.join('./results','mnist_QEP-LVM_q'+str(POWER.cpu().item())+'.png'),bbox_inches='tight')
+plt.figure(figsize=(20, 6))
+# idx2plot = model._get_batch_idx(500, seed)
+cls2plot = np.unique(labels)
+num_pcls = 20
+idx2plot = []
+for c in cls2plot:
+    idx2plot.append(np.random.default_rng(seed).choice(np.where(labels==c)[0], size=num_pcls, replace=False))
+idx2plot = np.concatenate(idx2plot)
+X_ = X[idx2plot]
+labels_ = labels[idx2plot]
+
+plt.subplot(131)
+# std_ = torch.nn.functional.softplus(model.X.q_log_sigma).detach().numpy()[idx2plot]
+# Select index of the smallest lengthscales by examining model.covar_module.base_kernel.lengthscales
+for i, label in enumerate(np.unique(labels_)):
+    X_i = X_[labels_ == label]
+    # scale_i = std_[labels_ == label]
+    # plt.scatter(X_i[:, l1], X_i[:, l2], c=[colors[i]], label=label)
+    plt.scatter(X_i[:, l1], X_i[:, l2], c=[colors[i]], marker="$"+str(label)+"$")
+    # plt.errorbar(X_i[:, l1], X_i[:, l2], xerr=scale_i[:,l1], yerr=scale_i[:,l2], label=label,c=colors[i], fmt='none')
+# plt.xlim([-1,1]); plt.ylim([-1,1])
+plt.title('2d latent subspace', fontsize=20)
+plt.xlabel('Latent dim 1', fontsize=20)
+plt.ylabel('Latent dim 2', fontsize=20)
+plt.tick_params(axis='both', which='major', labelsize=14)
+plt.subplot(132)
+plt.bar(np.arange(latent_dim), height=inv_lengthscale.detach().cpu().numpy().flatten())
+plt.title('Inverse Lengthscale of SE-ARD kernel', fontsize=18)
+plt.tick_params(axis='both', which='major', labelsize=14)
+plt.subplot(133)
+plt.plot(loss_list, label='batch_size='+str(batch_size))
+plt.title('Neg. ELBO Loss', fontsize=20)
+plt.tick_params(axis='both', which='major', labelsize=14)
+# plt.show()
+plt.savefig(os.path.join('./results','mnist_QEP-LVM_q'+str(q)+'.png'),bbox_inches='tight')
 
 # plot pairs
 import pandas as pd
@@ -260,6 +272,7 @@ fig, axes = plt.subplots(1,num_pairs, figsize=(21,4))
 for i, cls2plot in enumerate(pairs):
     plt.sca(axes[i])
     sns.kdeplot(data=dat2plot.iloc[np.where([lbl in cls2plot for lbl in labels])[0]], x='latdim_0', y='latdim_1', hue='label', palette=[colors[c] for c in cls2plot], fill=True, alpha=.5, legend=False)
+    # plt.xlim([-.5,.5]); plt.ylim([-.5,.5])
     for c in cls2plot:
         idx = np.random.default_rng(seed).choice(np.where(labels==c)[0], size=num_pcls, replace=False)
         axes[i].scatter(X[idx, l1], X[idx, l2], c=[colors[c]], marker="$"+str(c)+"$")
@@ -268,4 +281,41 @@ for i, cls2plot in enumerate(pairs):
     axes[i].set_ylabel('Latent dim 2' if i==0 else '', fontsize=16)
     # axes[i].tick_params(axis='both', which='major', labelsize=12)
 plt.subplots_adjust(wspace=0.15, hspace=0.15)
-plt.savefig(os.path.join('./results','mnist_QEP-LVM_q'+str(POWER.cpu().item())+'_latentpairs.png'),bbox_inches='tight')
+plt.savefig(os.path.join('./results','mnist_QEP-LVM_q'+str(q)+'_latentpairs.png'),bbox_inches='tight')
+
+# plot densities
+if 'sample_batch' not in globals():
+    batch_index = model._get_batch_idx(batch_size)
+    sample = model.sample_latent_variable()
+    sample_batch = sample[batch_index]
+qs = np.linspace(0, 4, num=50, endpoint=False)
+qs += qs[1]
+from sklearn.metrics import auc
+def likelihood(qs, normalize=True):
+    ps = np.zeros_like(qs)
+    for i,q in enumerate(qs):
+        model.power.power = q
+        # ps[i] = model.likelihood.log_marginal(Y[batch_index].to(device).T, model(sample_batch)).mean()
+        ps[i] = model.likelihood.expected_log_prob(Y[batch_index].to(device).T, model(sample_batch)).mean()
+    ps = np.exp(ps-ps.max())
+    if normalize:
+        area = auc(qs, ps)
+        ps /= area
+    return ps
+def prior(qs, normalize=True):
+    ps = model.power.power_prior.log_prob(qs)
+    ps = np.exp(ps-ps.max())
+    if normalize:
+        area = auc(qs, ps)
+        ps /= area
+    return ps
+fig = plt.figure(figsize=(7, 6))
+plt.plot(qs, likelihood(qs))
+plt.plot(qs, prior(qs))
+plt.axvline(q, linewidth=3, color='red')
+plt.legend(labels=['likelihood', 'prior', 'MAP'], fontsize=14, frameon=False)
+plt.title('Posterior', fontsize=20)
+plt.xlabel('q', fontsize=18)
+plt.ylabel(' ', fontsize=18)
+plt.tick_params(axis='both', which='major', labelsize=14)
+plt.savefig(os.path.join('./results','mnist_QEP-LVM_q'+str(q)+'_densities.png'),bbox_inches='tight')
