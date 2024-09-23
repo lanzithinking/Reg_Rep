@@ -156,6 +156,7 @@ optimizer = torch.optim.Adam([
 loss_list = []
 if os.path.exists(os.path.join('./results','qeplvm_varyingq_mnist_checkpoint.dat')):
     state_dict = torch.load(os.path.join('./results','qeplvm_varyingq_mnist_checkpoint.dat'), map_location=device)['model']
+    # state_dict, likelihood_state_dict = torch.load(os.path.join('./results','qeplvm_varyingq_mnist_checkpoint.dat'), map_location=device).values()
 else:
     # set device
     model = model.to(device)
@@ -212,6 +213,8 @@ else:
 # load the best model
 model.load_state_dict(state_dict)
 model.eval()
+# model.likelihood.load_state_dict(likelihood_state_dict)
+# model.likelihood.eval()
 # plot results
 inv_lengthscale = 1 / model.covar_module.base_kernel.lengthscale
 values, indices = torch.topk(model.covar_module.base_kernel.lengthscale, k=2,largest=False)
@@ -221,68 +224,68 @@ labels = labels.numpy()
 q = round(model.power.cpu().data.item(), 2)
 
 # plot
-import matplotlib.colors as mcolors
-colors = list(mcolors.TABLEAU_COLORS.values())
-
-plt.figure(figsize=(20, 6))
-# idx2plot = model._get_batch_idx(500, seed)
-cls2plot = np.unique(labels)
-num_pcls = 20
-idx2plot = []
-for c in cls2plot:
-    idx2plot.append(np.random.default_rng(seed).choice(np.where(labels==c)[0], size=num_pcls, replace=False))
-idx2plot = np.concatenate(idx2plot)
-X_ = X[idx2plot]
-labels_ = labels[idx2plot]
-
-plt.subplot(131)
-# std_ = torch.nn.functional.softplus(model.X.q_log_sigma).detach().numpy()[idx2plot]
-# Select index of the smallest lengthscales by examining model.covar_module.base_kernel.lengthscales
-for i, label in enumerate(np.unique(labels_)):
-    X_i = X_[labels_ == label]
-    # scale_i = std_[labels_ == label]
-    # plt.scatter(X_i[:, l1], X_i[:, l2], c=[colors[i]], label=label)
-    plt.scatter(X_i[:, l1], X_i[:, l2], c=[colors[i]], marker="$"+str(label)+"$")
-    # plt.errorbar(X_i[:, l1], X_i[:, l2], xerr=scale_i[:,l1], yerr=scale_i[:,l2], label=label,c=colors[i], fmt='none')
-# plt.xlim([-1,1]); plt.ylim([-1,1])
-plt.title('2d latent subspace', fontsize=20)
-plt.xlabel('Latent dim 1', fontsize=20)
-plt.ylabel('Latent dim 2', fontsize=20)
-plt.tick_params(axis='both', which='major', labelsize=14)
-plt.subplot(132)
-plt.bar(np.arange(latent_dim), height=inv_lengthscale.detach().cpu().numpy().flatten())
-plt.title('Inverse Lengthscale of SE-ARD kernel', fontsize=18)
-plt.tick_params(axis='both', which='major', labelsize=14)
-plt.subplot(133)
-plt.plot(loss_list, label='batch_size='+str(batch_size))
-plt.title('Neg. ELBO Loss', fontsize=20)
-plt.tick_params(axis='both', which='major', labelsize=14)
-# plt.show()
-plt.savefig(os.path.join('./results','mnist_QEP-LVM_q'+str(q)+'.png'),bbox_inches='tight')
-
-# plot pairs
-import pandas as pd
-import seaborn as sns
-dat2plot = pd.DataFrame(np.hstack((X[:,[l1,l2]],labels[:,None])),columns=['latdim_'+str(j) for j in range(2)]+['label'])
-dat2plot['label']=dat2plot['label'].astype(int)
-pairs = np.array([[0,6], [1,7], [2,3], [4,9], [5, 8]])
-num_pairs = len(pairs)
-num_pcls = 50
-fig, axes = plt.subplots(1,num_pairs, figsize=(21,4))
-for i, cls2plot in enumerate(pairs):
-    plt.sca(axes[i])
-    sns.kdeplot(data=dat2plot.iloc[np.where([lbl in cls2plot for lbl in labels])[0]], x='latdim_0', y='latdim_1', hue='label', palette=[colors[c] for c in cls2plot], fill=True, alpha=.5, legend=False)
-    # plt.xlim([-.5,.5]); plt.ylim([-.5,.5])
-    for c in cls2plot:
-        idx = np.random.default_rng(seed).choice(np.where(labels==c)[0], size=num_pcls, replace=False)
-        axes[i].scatter(X[idx, l1], X[idx, l2], c=[colors[c]], marker="$"+str(c)+"$")
-    axes[i].set_title('2d latent of '+np.array2string(cls2plot,separator=','), fontsize=18)
-    axes[i].set_xlabel('Latent dim 1', fontsize=16)
-    axes[i].set_ylabel('Latent dim 2' if i==0 else '', fontsize=16)
-    # axes[i].tick_params(axis='both', which='major', labelsize=12)
-plt.subplots_adjust(wspace=0.15, hspace=0.15)
-plt.savefig(os.path.join('./results','mnist_QEP-LVM_q'+str(q)+'_latentpairs.png'),bbox_inches='tight')
-
+# import matplotlib.colors as mcolors
+# colors = list(mcolors.TABLEAU_COLORS.values())
+#
+# plt.figure(figsize=(20, 6))
+# # idx2plot = model._get_batch_idx(500, seed)
+# cls2plot = np.unique(labels)
+# num_pcls = 20
+# idx2plot = []
+# for c in cls2plot:
+#     idx2plot.append(np.random.default_rng(seed).choice(np.where(labels==c)[0], size=num_pcls, replace=False))
+# idx2plot = np.concatenate(idx2plot)
+# X_ = X[idx2plot]
+# labels_ = labels[idx2plot]
+#
+# plt.subplot(131)
+# # std_ = torch.nn.functional.softplus(model.X.q_log_sigma).detach().numpy()[idx2plot]
+# # Select index of the smallest lengthscales by examining model.covar_module.base_kernel.lengthscales
+# for i, label in enumerate(np.unique(labels_)):
+#     X_i = X_[labels_ == label]
+#     # scale_i = std_[labels_ == label]
+#     # plt.scatter(X_i[:, l1], X_i[:, l2], c=[colors[i]], label=label)
+#     plt.scatter(X_i[:, l1], X_i[:, l2], c=[colors[i]], marker="$"+str(label)+"$")
+#     # plt.errorbar(X_i[:, l1], X_i[:, l2], xerr=scale_i[:,l1], yerr=scale_i[:,l2], label=label,c=colors[i], fmt='none')
+# # plt.xlim([-1,1]); plt.ylim([-1,1])
+# plt.title('2d latent subspace', fontsize=20)
+# plt.xlabel('Latent dim 1', fontsize=20)
+# plt.ylabel('Latent dim 2', fontsize=20)
+# plt.tick_params(axis='both', which='major', labelsize=14)
+# plt.subplot(132)
+# plt.bar(np.arange(latent_dim), height=inv_lengthscale.detach().cpu().numpy().flatten())
+# plt.title('Inverse Lengthscale of SE-ARD kernel', fontsize=18)
+# plt.tick_params(axis='both', which='major', labelsize=14)
+# plt.subplot(133)
+# plt.plot(loss_list, label='batch_size='+str(batch_size))
+# plt.title('Neg. ELBO Loss', fontsize=20)
+# plt.tick_params(axis='both', which='major', labelsize=14)
+# # plt.show()
+# plt.savefig(os.path.join('./results','mnist_QEP-LVM_q'+str(q)+'.png'),bbox_inches='tight')
+#
+# # plot pairs
+# import pandas as pd
+# import seaborn as sns
+# dat2plot = pd.DataFrame(np.hstack((X[:,[l1,l2]],labels[:,None])),columns=['latdim_'+str(j) for j in range(2)]+['label'])
+# dat2plot['label']=dat2plot['label'].astype(int)
+# pairs = np.array([[0,6], [1,7], [2,3], [4,9], [5, 8]])
+# num_pairs = len(pairs)
+# num_pcls = 50
+# fig, axes = plt.subplots(1,num_pairs, figsize=(21,4))
+# for i, cls2plot in enumerate(pairs):
+#     plt.sca(axes[i])
+#     sns.kdeplot(data=dat2plot.iloc[np.where([lbl in cls2plot for lbl in labels])[0]], x='latdim_0', y='latdim_1', hue='label', palette=[colors[c] for c in cls2plot], fill=True, alpha=.5, legend=False)
+#     # plt.xlim([-.5,.5]); plt.ylim([-.5,.5])
+#     for c in cls2plot:
+#         idx = np.random.default_rng(seed).choice(np.where(labels==c)[0], size=num_pcls, replace=False)
+#         axes[i].scatter(X[idx, l1], X[idx, l2], c=[colors[c]], marker="$"+str(c)+"$")
+#     axes[i].set_title('2d latent of '+np.array2string(cls2plot,separator=','), fontsize=18)
+#     axes[i].set_xlabel('Latent dim 1', fontsize=16)
+#     axes[i].set_ylabel('Latent dim 2' if i==0 else '', fontsize=16)
+#     # axes[i].tick_params(axis='both', which='major', labelsize=12)
+# plt.subplots_adjust(wspace=0.15, hspace=0.15)
+# plt.savefig(os.path.join('./results','mnist_QEP-LVM_q'+str(q)+'_latentpairs.png'),bbox_inches='tight')
+#
 # plot densities
 if 'sample_batch' not in globals():
     batch_index = model._get_batch_idx(batch_size)
@@ -294,7 +297,7 @@ from sklearn.metrics import auc
 def likelihood(qs, normalize=True):
     ps = np.zeros_like(qs)
     for i,q in enumerate(qs):
-        model.power.power = q
+        model.power.power = q; model.likelihood.power = torch.tensor(q)
         # ps[i] = model.likelihood.log_marginal(Y[batch_index].to(device).T, model(sample_batch)).mean()
         ps[i] = model.likelihood.expected_log_prob(Y[batch_index].to(device).T, model(sample_batch)).mean()
     ps = np.exp(ps-ps.max())
@@ -319,3 +322,17 @@ plt.xlabel('q', fontsize=18)
 plt.ylabel(' ', fontsize=18)
 plt.tick_params(axis='both', which='major', labelsize=14)
 plt.savefig(os.path.join('./results','mnist_QEP-LVM_q'+str(q)+'_densities.png'),bbox_inches='tight')
+
+# plot samples
+output_batch = model(sample_batch).mean.detach().cpu().numpy()
+# output_batch = model.likelihood(model(sample_batch)).mean.detach().cpu().numpy()
+fig, axes = plt.subplots(2,5, figsize=(20,8))
+for i,ax in enumerate(axes.flatten()):
+    plt.sca(ax)
+    idx_i = np.random.default_rng(seed).choice(np.where(labels[batch_index]==i)[0], size=1)
+    sample_digit = output_batch[:,idx_i].reshape((np.sqrt(output_batch.shape[0]).astype(int),)*2)
+    sample_digit = (sample_digit - sample_digit.min())/(sample_digit.max()-sample_digit.min())
+    plt.imshow(sample_digit, cmap='gray')#'Greys')
+    plt.axis('off')
+plt.subplots_adjust(wspace=0.1, hspace=0.1)
+plt.savefig(os.path.join('./results','mnist_QEP-LVM_q'+str(q)+'_sampledigits.png'),bbox_inches='tight')

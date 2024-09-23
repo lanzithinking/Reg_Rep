@@ -143,6 +143,7 @@ optimizer = torch.optim.Adam([
 loss_list = []
 if os.path.exists(os.path.join('./results','gplvm_mnist_checkpoint.dat')):
     state_dict = torch.load(os.path.join('./results','gplvm_mnist_checkpoint.dat'), map_location=device)['model']
+    # state_dict, likelihood_state_dict = torch.load(os.path.join('./results','gplvm_mnist_checkpoint.dat'), map_location=device).values()
 else:
     # set device
     model = model.to(device)
@@ -198,6 +199,8 @@ else:
 # load the best model
 model.load_state_dict(state_dict)
 model.eval()
+# likelihood.load_state_dict(likelihood_state_dict)
+# likelihood.eval()
 # plot results
 inv_lengthscale = 1 / model.covar_module.base_kernel.lengthscale
 values, indices = torch.topk(model.covar_module.base_kernel.lengthscale, k=2,largest=False)
@@ -265,3 +268,20 @@ for i, cls2plot in enumerate(pairs):
     # axes[i].tick_params(axis='both', which='major', labelsize=12)
 plt.subplots_adjust(wspace=0.15, hspace=0.15)
 plt.savefig(os.path.join('./results','mnist_GP-LVM_latentpairs.png'),bbox_inches='tight')
+
+# plot samples
+batch_index = model._get_batch_idx(batch_size)
+sample = model.sample_latent_variable()
+sample_batch = sample[batch_index]
+output_batch = model(sample_batch).mean.detach().cpu().numpy()
+# output_batch = likelihood(model(sample_batch)).mean.detach().cpu().numpy()
+fig, axes = plt.subplots(2,5, figsize=(20,8))
+for i,ax in enumerate(axes.flatten()):
+    plt.sca(ax)
+    idx_i = np.random.default_rng(seed).choice(np.where(labels[batch_index]==i)[0], size=1)
+    sample_digit = output_batch[:,idx_i].reshape((np.sqrt(output_batch.shape[0]).astype(int),)*2)
+    # sample_digit = (sample_digit - sample_digit.min())/(sample_digit.max()-sample_digit.min())
+    plt.imshow(sample_digit, cmap='gray')#'Greys')
+    plt.axis('off')
+plt.subplots_adjust(wspace=0.1, hspace=0.1)
+plt.savefig(os.path.join('./results','mnist_GP-LVM_sampledigits.png'),bbox_inches='tight')
