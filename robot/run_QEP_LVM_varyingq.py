@@ -5,7 +5,6 @@ import random
 import numpy as np
 import matplotlib.pylab as plt
 
-from sklearn.datasets import make_swiss_roll
 import torch
 from torch.utils.data import TensorDataset, DataLoader
 import tqdm
@@ -39,12 +38,12 @@ q = 2.0
 # POWER = torch.tensor(q, device=device)
 
 # create data
-dataset = {0:'swissroll',1:'swisshole'}[0]
-n_samples = 1000
-sr_points, sr_color = make_swiss_roll(n_samples=n_samples, noise=0.05, random_state=0, hole='hole' in dataset)
-Y, t = torch.tensor(sr_points), torch.tensor(sr_color)
-train_dataset = TensorDataset(Y, t, torch.arange(n_samples))
-batch_size = 256
+from load_data import *
+train, valid, test = load_weights()
+Y = torch.tensor(np.vstack((train, valid)))
+n_samples = Y.shape[0]
+train_dataset = TensorDataset(Y, torch.arange(n_samples))
+batch_size = 100
 train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 
 # define model
@@ -76,7 +75,7 @@ class bQEPLVM(BayesianQEPLVM):
         if pca == True:
              X_init = _init_pca(Y.float(), latent_dim) # Initialise X to PCA
         else:
-             X_init = torch.nn.Parameter(torch.rand(n, latent_dim))
+             X_init = torch.nn.Parameter(torch.randn(n, latent_dim))
 
         # LatentVariable (c)
         X = VariationalLatentVariable(n, data_dim, latent_dim, X_init, prior_x, power=self.power)
@@ -111,7 +110,7 @@ class bQEPLVM(BayesianQEPLVM):
 
 N = len(Y)
 data_dim = Y.shape[1]
-latent_dim = data_dim
+latent_dim = 10
 n_inducing = 25
 pca = False
 power_init = torch.tensor(q)
@@ -133,8 +132,8 @@ optimizer = torch.optim.Adam([
 
 
 loss_list = []
-if os.path.exists(os.path.join('./results_'+dataset,dataset+'_qeplvm_varyingq_checkpoint.dat')):
-    state_dict = torch.load(os.path.join('./results_'+dataset,dataset+'_qeplvm_varyingq_checkpoint.dat'), map_location=device)['model']
+if os.path.exists(os.path.join('./results','robot_qeplvm_varyingq_checkpoint.dat')):
+    state_dict = torch.load(os.path.join('./results','robot_qeplvm_varyingq_checkpoint.dat'), map_location=device)['model']
 else:
     # set device
     model = model.to(device)
@@ -146,7 +145,7 @@ else:
     model.train()
     # likelihood.train()
     
-    os.makedirs('./results_'+dataset, exist_ok=True)
+    os.makedirs('./results', exist_ok=True)
     # loss_list = []
     num_epochs = 10000
     iterator = tqdm.tqdm(range(num_epochs), desc="Epoch")
@@ -185,7 +184,7 @@ else:
     # save the model
     state_dict = optim_model#.state_dict()
     likelihood_state_dict = optim_likelihood#.state_dict()
-    torch.save({'model': state_dict, 'likelihood': likelihood_state_dict}, os.path.join('./results_'+dataset,dataset+'_qeplvm_varyingq_checkpoint.dat'))
+    torch.save({'model': state_dict, 'likelihood': likelihood_state_dict}, os.path.join('./results','robot_qeplvm_varyingq_checkpoint.dat'))
 
 # load the best model
 model.load_state_dict(state_dict)
@@ -198,15 +197,13 @@ q = round(model.power.cpu().data.item(), 2)
 
 idx2plot = model._get_batch_idx(500, seed)
 X = model.X.q_mu.detach().cpu().numpy()[idx2plot]
-colors = t[idx2plot]
 
 # plot
 plt.figure(figsize=(20, 6))
 plt.subplot(131)
-plt.scatter(X[:, l1], X[:, l2], c=colors, alpha=0.8)
+plt.scatter(X[:, l1], X[:, l2], alpha=0.8)
 # plt.xlim([-1,1]); plt.ylim([-1,1])
-# plt.title('2d latent subspace', fontsize=20)
-plt.title('q = '+str(q)+(' (Gaussian)' if q==2 else ''), fontsize=20)
+plt.title('2d latent subspace', fontsize=20)
 plt.xlabel('Latent dim 1', fontsize=20)
 plt.ylabel('Latent dim 2', fontsize=20)
 plt.tick_params(axis='both', which='major', labelsize=14)
@@ -219,68 +216,78 @@ plt.plot(loss_list, label='batch_size='+str(batch_size))
 plt.title('Neg. ELBO Loss', fontsize=20)
 plt.tick_params(axis='both', which='major', labelsize=14)
 # plt.show()
-os.makedirs('./results_'+dataset, exist_ok=True)
-plt.savefig(os.path.join('./results_'+dataset,dataset+'_QEP-LVM_q'+str(q)+'.png'),bbox_inches='tight')
+os.makedirs('./results', exist_ok=True)
+plt.savefig(os.path.join('./results','robot_QEP-LVM_q'+str(q)+'.png'),bbox_inches='tight')
 
-# fig = plt.figure(figsize=(8, 6))
-# plt.scatter(X[:, l1], X[:, l2], c=colors, alpha=0.8)
-# plt.title('q = '+str(q)+(' (Gaussian)' if q==2 else ''), fontsize=20)
-# # plt.axis('square')
-# plt.xlabel('Latent dim 1', fontsize=18)
-# plt.ylabel('Latent dim 2', fontsize=18)
-# plt.tick_params(axis='both', which='major', labelsize=14)
-# plt.savefig(os.path.join('./results_'+dataset,dataset+'_latent_QEP-LVM_q'+str(q)+'.png'),bbox_inches='tight')
-#
-# fig = plt.figure(figsize=(8, 6))
-# plt.bar(np.arange(latent_dim), height=inv_lengthscale.detach().cpu().numpy().flatten())
-# plt.title('Inverse Lengthscale of kernel', fontsize=20)
-# plt.ylabel(' ', fontsize=18)
-# plt.tick_params(axis='both', which='major', labelsize=14)
-# plt.savefig(os.path.join('./results_'+dataset,dataset+'_latdim_QEP-LVM_q'+str(q)+'.png'),bbox_inches='tight')
-#
-# # plot densities
-# if 'sample' not in globals():
-#     sample = model.sample_latent_variable()
-# qs = np.linspace(0, 4, num=50, endpoint=False)
-# qs += qs[1]
-# from sklearn.metrics import auc
-# def likelihood(qs, normalize=True):
-#     ps = np.zeros_like(qs)
-#     for i,q in enumerate(qs):
-#         model.power.power = q
-#         # ps[i] = model.likelihood.log_marginal(Y.to(device).T, model(sample)).mean()
-#         ps[i] = model.likelihood.expected_log_prob(Y.to(device).T, model(sample)).mean()
-#     ps = np.exp(ps-ps.max())
-#     if normalize:
-#         area = auc(qs, ps)
-#         ps /= area
-#     return ps
-# def prior(qs, normalize=True):
-#     ps = model.power.power_prior.log_prob(qs)
-#     ps = np.exp(ps-ps.max())
-#     if normalize:
-#         area = auc(qs, ps)
-#         ps /= area
-#     return ps
-# def posterior(qs, normalize=True):
-#     ps = np.zeros_like(qs)
-#     for i,q in enumerate(qs):
-#         model.power.power = q
-#         ps[i] = mll(model(sample), Y.to(device).T).mean()
-#     ps = np.exp(ps-ps.max())
-#     if normalize:
-#         area = auc(qs, ps)
-#         ps /= area
-#     return ps
-# fig = plt.figure(figsize=(7, 6))
-# plt.plot(qs, likelihood(qs))
-# plt.plot(qs, prior(qs))
-# # plt.plot(qs, posterior(qs))
-# plt.axvline(q, linewidth=3, color='red')
-# plt.legend(labels=['likelihood', 'prior', 'MAP'], fontsize=14, frameon=False)
-# # plt.legend(labels=['prior', 'posterior', 'MAP'], fontsize=14, frameon=False)
-# plt.title('Posterior', fontsize=20)
-# plt.xlabel('q', fontsize=18)
-# plt.ylabel(' ', fontsize=18)
-# plt.tick_params(axis='both', which='major', labelsize=14)
-# plt.savefig(os.path.join('./results_'+dataset,dataset+'_densities_QEP-LVM_q'+str(q)+'.png'),bbox_inches='tight')
+fig = plt.figure(figsize=(8, 6))
+plt.scatter(X[:, l1], X[:, l2], alpha=0.8)
+plt.title('q = '+str(q)+(' (Gaussian)' if q==2 else ''), fontsize=20)
+# plt.axis('square')
+plt.xlabel('Latent dim 1', fontsize=18)
+plt.ylabel('Latent dim 2', fontsize=18)
+plt.tick_params(axis='both', which='major', labelsize=14)
+plt.savefig(os.path.join('./results','robot_latent_QEP-LVM_q'+str(q)+'.png'),bbox_inches='tight')
+
+fig = plt.figure(figsize=(8, 6))
+plt.bar(np.arange(latent_dim), height=inv_lengthscale.detach().cpu().numpy().flatten())
+plt.title('Inverse Lengthscale of kernel', fontsize=20)
+plt.ylabel(' ', fontsize=18)
+plt.tick_params(axis='both', which='major', labelsize=14)
+plt.savefig(os.path.join('./results','robot_latdim_QEP-LVM_q'+str(q)+'.png'),bbox_inches='tight')
+
+# plot latent space
+fig = plt.figure(figsize=(8,6))
+from sklearn.manifold import TSNE
+model_tsne = TSNE(n_components=2, random_state=seed)
+Z_ = model_tsne.fit_transform(X)
+plt.scatter(Z_[:, 0], Z_[:, 1])
+plt.xlabel('Latent dim 1', fontsize=20)
+plt.ylabel('Latent dim 2', fontsize=20)
+plt.savefig(os.path.join('./results','robot_QEP-LVM_q'+str(q)+'_latent.png'),bbox_inches='tight')
+
+# plot densities
+if 'sample' not in globals():
+    sample = model.sample_latent_variable()
+qs = np.linspace(0, 4, num=50, endpoint=False)
+qs += qs[1]
+from sklearn.metrics import auc
+def likelihood(qs, normalize=True):
+    ps = np.zeros_like(qs)
+    for i,q in enumerate(qs):
+        model.power.power = q
+        # ps[i] = model.likelihood.log_marginal(Y.to(device).T, model(sample)).mean()
+        ps[i] = model.likelihood.expected_log_prob(Y.to(device).T, model(sample)).mean()
+    ps = np.exp(ps-ps.max())
+    if normalize:
+        area = auc(qs, ps)
+        ps /= area
+    return ps
+def prior(qs, normalize=True):
+    ps = model.power.power_prior.log_prob(qs)
+    ps = np.exp(ps-ps.max())
+    if normalize:
+        area = auc(qs, ps)
+        ps /= area
+    return ps
+def posterior(qs, normalize=True):
+    ps = np.zeros_like(qs)
+    for i,q in enumerate(qs):
+        model.power.power = q
+        ps[i] = mll(model(sample), Y.to(device).T).mean()
+    ps = np.exp(ps-ps.max())
+    if normalize:
+        area = auc(qs, ps)
+        ps /= area
+    return ps
+fig = plt.figure(figsize=(7, 6))
+plt.plot(qs, likelihood(qs))
+plt.plot(qs, prior(qs))
+# plt.plot(qs, posterior(qs))
+plt.axvline(q, linewidth=3, color='red')
+plt.legend(labels=['likelihood', 'prior', 'MAP'], fontsize=14, frameon=False)
+# plt.legend(labels=['prior', 'posterior', 'MAP'], fontsize=14, frameon=False)
+plt.title('Posterior', fontsize=20)
+plt.xlabel('q', fontsize=18)
+plt.ylabel(' ', fontsize=18)
+plt.tick_params(axis='both', which='major', labelsize=14)
+plt.savefig(os.path.join('./results','robot_densities_QEP-LVM_q'+str(q)+'.png'),bbox_inches='tight')

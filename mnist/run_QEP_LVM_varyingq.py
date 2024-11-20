@@ -154,9 +154,9 @@ optimizer = torch.optim.Adam([
 ], lr=0.01)
 
 loss_list = []
-if os.path.exists(os.path.join('./results','qeplvm_varyingq_mnist_checkpoint.dat')):
-    state_dict = torch.load(os.path.join('./results','qeplvm_varyingq_mnist_checkpoint.dat'), map_location=device)['model']
-    # state_dict, likelihood_state_dict = torch.load(os.path.join('./results','qeplvm_varyingq_mnist_checkpoint.dat'), map_location=device).values()
+if os.path.exists(os.path.join('./results','mnist_qeplvm_varyingq_checkpoint.dat')):
+    state_dict = torch.load(os.path.join('./results','mnist_qeplvm_varyingq_checkpoint.dat'), map_location=device)['model']
+    # state_dict, likelihood_state_dict = torch.load(os.path.join('./results','mnist_qeplvm_varyingq_checkpoint.dat'), map_location=device).values()
 else:
     # set device
     model = model.to(device)
@@ -208,7 +208,7 @@ else:
     # save the model
     state_dict = optim_model#.state_dict()
     likelihood_state_dict = optim_likelihood#.state_dict()
-    torch.save({'model': state_dict, 'likelihood': likelihood_state_dict}, os.path.join('./results','qeplvm_varyingq_mnist_checkpoint.dat'))
+    torch.save({'model': state_dict, 'likelihood': likelihood_state_dict}, os.path.join('./results','mnist_qeplvm_varyingq_checkpoint.dat'))
 
 # load the best model
 model.load_state_dict(state_dict)

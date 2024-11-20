@@ -5,17 +5,18 @@ import numpy as np
 
 os.makedirs('./results', exist_ok=True)
 
-qs=[1.0, 1.149999976158142, 1.5, 2.0]
+# qs=[1.0, 1.149999976158142, 1.5, 2.0]
+qs=[1.0, 1.15, 1.5, 2.0]
 algs=['q='+str(i) for i in qs]
 num_algs=len(algs)
 
 # set the format
 folder = './results'
-header = ('Method', 'ACC', 'AUC', 'LPP', 'time')
+header = ('Method', 'ACC', 'AUC', 'ARI', 'NMI', 'LPP', 'time')
 incl_header = True
-fmt = ('%s',)+('%.4f',)*4
+fmt = ('%s',)+('%.4f',)*6
 # obtain results
-formats = ('i4','S20')+('f4',)*4
+formats = ('i4','S20')+('f4',)*6
 f_read=np.loadtxt(os.path.join('./results','oilflow_latdim_QEP-LVM.txt'), delimiter=',', dtype={'names':('seed',)+header,'formats':formats})
 
 for j in range(num_algs):

@@ -96,7 +96,7 @@ if __name__=='__main__':
     # POWER = torch.tensor(q, device=device)
     
     # create data
-    dataset = {0:'swissroll',1:'swisshole'}[1]
+    dataset = {0:'swissroll',1:'swisshole'}[0]
     n_samples = 1000
     sr_points, sr_color = make_swiss_roll(n_samples=n_samples, noise=0.05, random_state=0, hole='hole' in dataset)
     Y, t = torch.tensor(sr_points), torch.tensor(sr_color)
@@ -133,7 +133,7 @@ if __name__=='__main__':
             if pca == True:
                  X_init = _init_pca(Y.float(), latent_dim) # Initialise X to PCA
             else:
-                 X_init = torch.nn.Parameter(torch.randn(n, latent_dim))
+                 X_init = torch.nn.Parameter(torch.rand(n, latent_dim))
     
             # LatentVariable (c)
             X = VariationalLatentVariable(n, data_dim, latent_dim, X_init, prior_x, power=self.power)
@@ -190,8 +190,8 @@ if __name__=='__main__':
     
     
     loss_list = []
-    if os.path.exists(os.path.join('./results',dataset+'_qeplvm_varyingq_checkpoint.dat')):
-        state_dict = torch.load(os.path.join('./results',dataset+'_qeplvm_varyingq_checkpoint.dat'), map_location=device)['model']
+    if os.path.exists(os.path.join('./results_'+dataset,dataset+'_qeplvm_varyingq_checkpoint.dat')):
+        state_dict = torch.load(os.path.join('./results_'+dataset,dataset+'_qeplvm_varyingq_checkpoint.dat'), map_location=device)['model']
     else:
         # set device
         model = model.to(device)
@@ -203,6 +203,7 @@ if __name__=='__main__':
         model.train()
         # likelihood.train()
         
+        os.makedirs('./results_'+dataset, exist_ok=True)
         # loss_list = []
         num_epochs = 10000
         iterator = tqdm.tqdm(range(num_epochs), desc="Epoch")
@@ -241,7 +242,7 @@ if __name__=='__main__':
         # save the model
         state_dict = optim_model#.state_dict()
         likelihood_state_dict = optim_likelihood#.state_dict()
-        torch.save({'model': state_dict, 'likelihood': likelihood_state_dict}, os.path.join('./results',dataset+'_qeplvm_varyingq_checkpoint.dat'))
+        torch.save({'model': state_dict, 'likelihood': likelihood_state_dict}, os.path.join('./results_'+dataset,dataset+'_qeplvm_varyingq_checkpoint.dat'))
     
     # load the best model
     model.load_state_dict(state_dict)
@@ -265,7 +266,7 @@ if __name__=='__main__':
     grid_data = pd.DataFrame(grid_data.T,columns=['q','$l_1$','$l_2$', '$l_3$'])
     
     # plot
-    os.makedirs('./results', exist_ok=True)
+    os.makedirs('./results_'+dataset, exist_ok=True)
     sns.set(font_scale=1.2)
     import time
     t_start=time.time()
@@ -281,6 +282,6 @@ if __name__=='__main__':
                 ax.set_ylabel(ax.get_ylabel(), rotation = 0)
             # set y labels alignment
             ax.yaxis.get_label().set_horizontalalignment('right')
-    g.savefig(os.path.join('./results', dataset+'_pairpdf_QEP-LVM_q'+str(q)+'.png'),bbox_inches='tight')
+    g.savefig(os.path.join('./results_'+dataset, dataset+'_pairpdf_QEP-LVM_q'+str(q)+'.png'),bbox_inches='tight')
     t_end=time.time()
     print('time used: %.5f'% (t_end-t_start))

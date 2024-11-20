@@ -29,7 +29,8 @@ from gpytorch.distributions import MultivariateQExponential
 # set device
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-POWER = torch.tensor(1.15, device=device)
+q = 2.0
+POWER = torch.tensor(q, device=device)
 
 # define model
 def _init_pca(Y, latent_dim):
@@ -38,7 +39,7 @@ def _init_pca(Y, latent_dim):
 
 class bQEPLVM(BayesianQEPLVM):
     def __init__(self, n, data_dim, latent_dim, n_inducing, **kwargs):
-        self.power = torch.tensor(POWER)
+        self.power = POWER
         self.n = n
         self.batch_shape = torch.Size([data_dim])
 
@@ -98,7 +99,7 @@ def train_QEPLVM(Y, latent_dim=None, n_inducing=25, batch_size=100, num_epochs=1
         model.X.q_log_sigma = kwargs.pop('X_S_init')
     
     # Likelihood
-    likelihood = QExponentialLikelihood(batch_shape=model.batch_shape, power=torch.tensor(POWER))
+    likelihood = QExponentialLikelihood(batch_shape=model.batch_shape, power=POWER)
     
     # Declaring the objective to be optimised along with optimiser
     # (see models/latent_variable.py for how the additional loss terms are accounted for)
@@ -107,16 +108,17 @@ def train_QEPLVM(Y, latent_dim=None, n_inducing=25, batch_size=100, num_epochs=1
     optimizer = torch.optim.Adam([
         {'params': model.parameters()},
         {'params': likelihood.parameters()}
-    ], lr=0.004) # 2:0.002, 1.0:0.005, 1.5:0.003
+    ], lr={2.0:0.002, 1.0:0.005, 1.5:0.003, 1.15:0.004}[q])
     
     
     loss_list = []
-    f_name = 'oilflow_qeplvm_q'+str(POWER.cpu().item())+'_class_'+kwargs.pop('class_','full')+'_checkpoint.dat'
-    if os.path.exists(os.path.join('./results',f_name)):
-        state_dict = torch.load(os.path.join('./results',f_name), map_location=device)
+    f_name = 'oilflow_qeplvm_q'+str(q)+'_class_'+kwargs.pop('class_','full')+'_checkpoint_seed'+str(kwargs.pop('seed',2024))+'.dat'
+    if os.path.exists(os.path.join('./results/cls',f_name)):
+        state_dict = torch.load(os.path.join('./results/cls',f_name), map_location=device)
         # load the best model
         model.load_state_dict(state_dict['model'])
         likelihood.load_state_dict(state_dict['likelihood'])
+        min_loss = state_dict['loss']
     else:
         # set device
         model = model.to(device)
@@ -127,7 +129,7 @@ def train_QEPLVM(Y, latent_dim=None, n_inducing=25, batch_size=100, num_epochs=1
         model.train()
         likelihood.train()
         
-        os.makedirs('./results', exist_ok=True)
+        os.makedirs('./results/cls', exist_ok=True)
         # num_epochs = 10000
         iterator = tqdm.tqdm(range(num_epochs), desc="Epoch")
         for epoch in iterator:
@@ -159,7 +161,7 @@ def train_QEPLVM(Y, latent_dim=None, n_inducing=25, batch_size=100, num_epochs=1
             # save the model
             model_state_dict = optim_model#.state_dict()
             likelihood_state_dict = optim_likelihood#.state_dict()
-            torch.save({'model': model_state_dict, 'likelihood': likelihood_state_dict}, os.path.join('./results',f_name))
+            torch.save({'model': model_state_dict, 'likelihood': likelihood_state_dict, 'loss': min_loss}, os.path.join('./results/cls',f_name))
     # ready for evaluation
     model.eval()
     likelihood.eval()
@@ -186,7 +188,7 @@ def main(seed=2024):
     
     Y = torch.Tensor(np.loadtxt(fname='DataTrn.txt'))
     labels = torch.Tensor(np.loadtxt(fname='DataTrnLbls.txt'))
-    labels = (labels @ np.diag([0, 1, 2])).sum(axis=1)
+    labels = (labels @ np.diag([0, 1, 2])).sum(axis=1).int()
     batch_size = 100
     num_epochs = 5000
     N, data_dim = Y.shape
@@ -202,14 +204,15 @@ def main(seed=2024):
     
     log_predprob = torch.zeros((n_class, n_test))
     loss = np.zeros((n_class, 2))
+    time_ = 0
     for k in torch.unique(labels):
         # model based on training data
         Y_train = Y[train_idx][labels[train_idx]==k]
         X_init = _init_pca(Y_train, latent_dim)
         beginning=timeit.default_timer()
-        model_train, likelihood_train, loss[k.int()][0] = train_QEPLVM(Y_train, latent_dim, batch_size=batch_size, num_epochs=num_epochs, 
-                                                                       save_model=False, class_=str(k.cpu().item())+'train', X_init=X_init)
-        time_ = timeit.default_timer()-beginning
+        model_train, likelihood_train, loss[k][0] = train_QEPLVM(Y_train, latent_dim, batch_size=batch_size, num_epochs=num_epochs, 
+                                                                       save_model=False, class_=str(k.cpu().item())+'train', X_init=X_init, seed=seed)
+        time_ += timeit.default_timer()-beginning
         sample = model_train.sample_latent_variable()
         batch_idx = np.random.default_rng(seed).choice(np.arange(Y_train.shape[0]), size=min(batch_size,Y_train.shape[0]), replace=False)
         mll = VariationalELBO(likelihood_train, model_train, num_data=model_train.n)
@@ -225,9 +228,9 @@ def main(seed=2024):
         fix_param = {'model.X.q_mu': np.arange(Y_train.shape[0]),
                      'model.X.q_log_sigma': np.arange(Y_train.shape[0])}
         beginning=timeit.default_timer()
-        model_full, likelihood_full, loss[k.int()][1] = train_QEPLVM(Y_full, latent_dim, batch_size=batch_size, num_epochs=num_epochs, 
+        model_full, likelihood_full, loss[k][1] = train_QEPLVM(Y_full, latent_dim, batch_size=batch_size, num_epochs=num_epochs, 
                                                                      save_model=False, class_=str(k.cpu().item())+'full', X_init=X_init, X_S_init=X_S_init, 
-                                                                     fix_param=fix_param)
+                                                                     fix_param=fix_param, seed=seed)
         time_ += timeit.default_timer()-beginning
         # sample_ = sample.clone()
         sample = model_full.sample_latent_variable()
@@ -240,7 +243,7 @@ def main(seed=2024):
         elbo_full = loglik[:,-n_test:].sum(0)+loglik[:,:-n_test].sum(0).mean()-kl.sum()
         
         # log prediction probabilities
-        log_predprob[k.int()] = elbo_full - elbo_train + torch.log(labels[test_idx].eq(k).float().mean())
+        log_predprob[k] = elbo_full - elbo_train + torch.log(labels[test_idx].eq(k).float().mean())
     # summarize losses
     import pandas as pd
     loss = pd.DataFrame(loss, columns=['training', 'full'])
@@ -256,15 +259,20 @@ def main(seed=2024):
         AUC = roc_auc_score(labels[test_idx].cpu(), t_score.detach().cpu(), multi_class='ovo')
     else:
         AUC = roc_auc_score(labels[test_idx].cpu(), t_score.detach().cpu())
+    from sklearn.metrics import adjusted_rand_score, normalized_mutual_info_score
+    ARI = adjusted_rand_score(labels[test_idx].cpu(), pred)
+    NMI = normalized_mutual_info_score(labels[test_idx].cpu(), pred)
     print('Test Accuracy: {}%'.format(100. * ACC))
     print('Test AUC: {}'.format(AUC))
+    print('Test ARI: {}'.format(ARI))
+    print('Test NMI: {}'.format(NMI))
     print('Test LPP: {}'.format(LPP))
     
     # save to file
     os.makedirs('./results', exist_ok=True)
-    stats = np.array([ACC, AUC, LPP, time_])
-    stats = np.array([seed,'q='+str(POWER.cpu().item())]+[np.array2string(r, precision=4) for r in stats])[None,:]
-    header = ['seed', 'Method', 'ACC', 'AUC', 'LPP', 'time']
+    stats = np.array([ACC, AUC, ARI, NMI, LPP, time_])
+    stats = np.array([seed,'q='+str(q)]+[np.array2string(r, precision=4) for r in stats])[None,:]
+    header = ['seed', 'Method', 'ACC', 'AUC', 'ARI', 'NMI', 'LPP', 'time']
     f_name = os.path.join('./results','oilflow_latdim_QEP-LVM.txt')
     with open(f_name,'ab') as f:
         np.savetxt(f,stats,fmt="%s",delimiter=',',header=','.join(header) if seed==2024 else '')

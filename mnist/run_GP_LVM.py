@@ -141,9 +141,9 @@ optimizer = torch.optim.Adam([
 
 
 loss_list = []
-if os.path.exists(os.path.join('./results','gplvm_mnist_checkpoint.dat')):
-    state_dict = torch.load(os.path.join('./results','gplvm_mnist_checkpoint.dat'), map_location=device)['model']
-    # state_dict, likelihood_state_dict = torch.load(os.path.join('./results','gplvm_mnist_checkpoint.dat'), map_location=device).values()
+if os.path.exists(os.path.join('./results','mnist_gplvm_checkpoint.dat')):
+    state_dict = torch.load(os.path.join('./results','mnist_gplvm_checkpoint.dat'), map_location=device)['model']
+    # state_dict, likelihood_state_dict = torch.load(os.path.join('./results','mnist_gplvm_checkpoint.dat'), map_location=device).values()
 else:
     # set device
     model = model.to(device)
@@ -194,7 +194,7 @@ else:
     # save the model
     state_dict = optim_model#.state_dict()
     likelihood_state_dict = optim_likelihood#.state_dict()
-    torch.save({'model': state_dict, 'likelihood': likelihood_state_dict}, os.path.join('./results','gplvm_mnist_checkpoint.dat'))
+    torch.save({'model': state_dict, 'likelihood': likelihood_state_dict}, os.path.join('./results','mnist_gplvm_checkpoint.dat'))
 
 # load the best model
 model.load_state_dict(state_dict)
@@ -214,14 +214,14 @@ colors = list(mcolors.TABLEAU_COLORS.values())
 
 # plt.figure(figsize=(20, 6))
 # # idx2plot = model._get_batch_idx(500, seed)
-# cls2plot = np.unique(labels)
-# num_pcls = 20
-# idx2plot = []
-# for c in cls2plot:
-#     idx2plot.append(np.random.default_rng(seed).choice(np.where(labels==c)[0], size=num_pcls, replace=False))
-# idx2plot = np.concatenate(idx2plot)
-# X_ = X[idx2plot]
-# labels_ = labels[idx2plot]
+cls2plot = np.unique(labels)
+num_pcls = 100
+idx2plot = []
+for c in cls2plot:
+    idx2plot.append(np.random.default_rng(seed).choice(np.where(labels==c)[0], size=num_pcls, replace=False))
+idx2plot = np.concatenate(idx2plot)
+X_ = X[idx2plot]
+labels_ = labels[idx2plot]
 #
 # plt.subplot(131)
 # # std_ = torch.nn.functional.softplus(model.X.q_log_sigma).detach().numpy()[idx2plot]
@@ -247,41 +247,56 @@ colors = list(mcolors.TABLEAU_COLORS.values())
 # # plt.show()
 # plt.savefig(os.path.join('./results','mnist_GP-LVM.png'),bbox_inches='tight')
 
-# plot pairs
-import pandas as pd
-import seaborn as sns
-dat2plot = pd.DataFrame(np.hstack((X[:,[l1,l2]],labels[:,None])),columns=['latdim_'+str(j) for j in range(2)]+['label'])
-dat2plot['label']=dat2plot['label'].astype(int)
-pairs = np.array([[0,6], [1,7], [2,3], [4,9], [5, 8]])
-num_pairs = len(pairs)
-num_pcls = 50
-fig, axes = plt.subplots(1,num_pairs, figsize=(21,4))
-for i, cls2plot in enumerate(pairs):
-    plt.sca(axes[i])
-    sns.kdeplot(data=dat2plot.iloc[np.where([lbl in cls2plot for lbl in labels])[0]], x='latdim_0', y='latdim_1', hue='label', palette=[colors[c] for c in cls2plot], fill=True, alpha=.5, legend=False)
-    for c in cls2plot:
-        idx = np.random.default_rng(seed).choice(np.where(labels==c)[0], size=num_pcls, replace=False)
-        axes[i].scatter(X[idx, l1], X[idx, l2], c=[colors[c]], marker="$"+str(c)+"$")
-    axes[i].set_title('2d latent of '+np.array2string(cls2plot,separator=','), fontsize=18)
-    axes[i].set_xlabel('Latent dim 1', fontsize=16)
-    axes[i].set_ylabel('Latent dim 2' if i==0 else '', fontsize=16)
-    # axes[i].tick_params(axis='both', which='major', labelsize=12)
-plt.subplots_adjust(wspace=0.15, hspace=0.15)
-plt.savefig(os.path.join('./results','mnist_GP-LVM_latentpairs.png'),bbox_inches='tight')
+# plot latent space
+fig = plt.figure(figsize=(7,6))
+from sklearn.manifold import TSNE
+model_tsne = TSNE(n_components=2, random_state=seed)
+Z = model_tsne.fit_transform(X_)
+for i, label in enumerate(np.unique(labels_)):
+    Z_i = Z[labels_ == label]
+    plt.scatter(Z_i[:, 0], Z_i[:, 1], c=[colors[i]], marker="$"+str(label)+"$")#label=label)
+# plt.title("Latent Variable per Class", fontsize=20)
+plt.title('q = 2.0 (Gaussian)', fontsize=25)
+plt.xlabel('Latent dim 1', fontsize=20)
+plt.ylabel('Latent dim 2', fontsize=20)
+plt.tick_params(axis='both', which='major', labelsize=15)
+plt.savefig(os.path.join('./results','mnist_GP-LVM_latent.png'),bbox_inches='tight')
 
-# plot samples
-batch_index = model._get_batch_idx(batch_size)
-sample = model.sample_latent_variable()
-sample_batch = sample[batch_index]
-output_batch = model(sample_batch).mean.detach().cpu().numpy()
-# output_batch = likelihood(model(sample_batch)).mean.detach().cpu().numpy()
-fig, axes = plt.subplots(2,5, figsize=(20,8))
-for i,ax in enumerate(axes.flatten()):
-    plt.sca(ax)
-    idx_i = np.random.default_rng(seed).choice(np.where(labels[batch_index]==i)[0], size=1)
-    sample_digit = output_batch[:,idx_i].reshape((np.sqrt(output_batch.shape[0]).astype(int),)*2)
-    # sample_digit = (sample_digit - sample_digit.min())/(sample_digit.max()-sample_digit.min())
-    plt.imshow(sample_digit, cmap='gray')#'Greys')
-    plt.axis('off')
-plt.subplots_adjust(wspace=0.1, hspace=0.1)
-plt.savefig(os.path.join('./results','mnist_GP-LVM_sampledigits.png'),bbox_inches='tight')
+# # plot latent pairs
+# import pandas as pd
+# import seaborn as sns
+# dat2plot = pd.DataFrame(np.hstack((X[:,[l1,l2]],labels[:,None])),columns=['latdim_'+str(j) for j in range(2)]+['label'])
+# dat2plot['label']=dat2plot['label'].astype(int)
+# pairs = np.array([[0,6], [1,7], [2,3], [4,9], [5, 8]])
+# num_pairs = len(pairs)
+# num_pcls = 50
+# fig, axes = plt.subplots(1,num_pairs, figsize=(21,4))
+# for i, cls2plot in enumerate(pairs):
+#     plt.sca(axes[i])
+#     sns.kdeplot(data=dat2plot.iloc[np.where([lbl in cls2plot for lbl in labels])[0]], x='latdim_0', y='latdim_1', hue='label', palette=[colors[c] for c in cls2plot], fill=True, alpha=.5, legend=False)
+#     for c in cls2plot:
+#         idx = np.random.default_rng(seed).choice(np.where(labels==c)[0], size=num_pcls, replace=False)
+#         axes[i].scatter(X[idx, l1], X[idx, l2], c=[colors[c]], marker="$"+str(c)+"$")
+#     axes[i].set_title('2d latent of '+np.array2string(cls2plot,separator=','), fontsize=18)
+#     axes[i].set_xlabel('Latent dim 1', fontsize=16)
+#     axes[i].set_ylabel('Latent dim 2' if i==0 else '', fontsize=16)
+#     # axes[i].tick_params(axis='both', which='major', labelsize=12)
+# plt.subplots_adjust(wspace=0.15, hspace=0.15)
+# plt.savefig(os.path.join('./results','mnist_GP-LVM_latentpairs.png'),bbox_inches='tight')
+#
+# # plot samples
+# batch_index = model._get_batch_idx(batch_size)
+# sample = model.sample_latent_variable()
+# sample_batch = sample[batch_index]
+# output_batch = model(sample_batch).mean.detach().cpu().numpy()
+# # output_batch = likelihood(model(sample_batch)).mean.detach().cpu().numpy()
+# fig, axes = plt.subplots(2,5, figsize=(20,8))
+# for i,ax in enumerate(axes.flatten()):
+#     plt.sca(ax)
+#     idx_i = np.random.default_rng(seed).choice(np.where(labels[batch_index]==i)[0], size=1)
+#     sample_digit = output_batch[:,idx_i].reshape((np.sqrt(output_batch.shape[0]).astype(int),)*2)
+#     # sample_digit = (sample_digit - sample_digit.min())/(sample_digit.max()-sample_digit.min())
+#     plt.imshow(sample_digit, cmap='gray')#'Greys')
+#     plt.axis('off')
+# plt.subplots_adjust(wspace=0.1, hspace=0.1)
+# plt.savefig(os.path.join('./results','mnist_GP-LVM_sampledigits.png'),bbox_inches='tight')

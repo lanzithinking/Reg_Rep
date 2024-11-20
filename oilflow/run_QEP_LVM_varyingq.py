@@ -140,8 +140,8 @@ optimizer = torch.optim.Adam([
 
 
 loss_list = []
-if os.path.exists(os.path.join('./results','qeplvm_varyingq_oilflow_checkpoint.dat')):
-    state_dict = torch.load(os.path.join('./results','qeplvm_varyingq_oilflow_checkpoint.dat'), map_location=device)['model']
+if os.path.exists(os.path.join('./results','oilflow_qeplvm_varyingq_checkpoint.dat')):
+    state_dict = torch.load(os.path.join('./results','oilflow_qeplvm_varyingq_checkpoint.dat'), map_location=device)['model']
 else:
     # set device
     model = model.to(device)
@@ -179,7 +179,7 @@ else:
     # save the model
     state_dict = optim_model#.state_dict()
     likelihood_state_dict = optim_likelihood#.state_dict()
-    torch.save({'model': state_dict, 'likelihood': likelihood_state_dict}, os.path.join('./results','qeplvm_varyingq_oilflow_checkpoint.dat'))
+    torch.save({'model': state_dict, 'likelihood': likelihood_state_dict}, os.path.join('./results','oilflow_qeplvm_varyingq_checkpoint.dat'))
 
 # load the best model
 model.load_state_dict(state_dict)
@@ -233,17 +233,17 @@ for i, label in enumerate(np.unique(labels)):
 # dat2plot = pd.DataFrame(np.hstack((X[:,[l1,l2]],std[:,[l1,l2]], labels[:,None])),columns=['latdim_'+str(j) for j in range(2)]+['stddim_'+str(j) for j in range(2)]+['label'])
 # dat2plot['label']=dat2plot['label'].astype(int)
 # sns.relplot(data=dat2plot, x='latdim_0', y='latdim_1', hue='label', style='label', palette=colors[:len(np.unique(labels))], legend=False)
-plt.title('q = '+str(q)+(' (Gaussian)' if q==2 else ''), fontsize=20)
+plt.title('q = '+str(q)+(' (Gaussian)' if q==2 else ''), fontsize=25)
 plt.xlabel('Latent dim 1', fontsize=20)
 plt.ylabel('Latent dim 2', fontsize=20)
-plt.tick_params(axis='both', which='major', labelsize=14)
+plt.tick_params(axis='both', which='major', labelsize=15)
 plt.savefig(os.path.join('./results','./oilflow_latent_QEP-LVM_q'+str(q)+'.png'),bbox_inches='tight')
-#
-# plt.figure(figsize=(7, 6))
-# plt.bar(np.arange(latent_dim), height=inv_lengthscale.detach().cpu().numpy().flatten())
-# plt.title('Inverse Lengthscale of kernel', fontsize=20)
-# plt.tick_params(axis='both', which='major', labelsize=14)
-# plt.savefig(os.path.join('./results','./oilflow_latdim_QEP-LVM_q'+str(q)+'.png'),bbox_inches='tight')
+
+plt.figure(figsize=(7, 6))
+plt.bar(np.arange(latent_dim), height=inv_lengthscale.detach().cpu().numpy().flatten())
+plt.title('Inverse Lengthscale of kernel', fontsize=25)
+plt.tick_params(axis='both', which='major', labelsize=15)
+plt.savefig(os.path.join('./results','./oilflow_latdim_QEP-LVM_q'+str(q)+'.png'),bbox_inches='tight')
 
 # # plot densities
 # if 'sample' not in globals():

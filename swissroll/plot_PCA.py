@@ -28,17 +28,14 @@ ax.scatter(
 )
 # ax.set_title("Swiss Roll", fontsize=18)# in Ambient Space")
 ax.view_init(azim=-66, elev=12)
-os.makedirs('./results', exist_ok=True)
-plt.savefig(os.path.join('./results',dataset+'.png'),bbox_inches='tight')
+os.makedirs('./results_'+dataset, exist_ok=True)
+plt.savefig(os.path.join('./results_'+dataset,dataset+'.png'),bbox_inches='tight')
 
 def _pca(Y, latent_dim):
     U, S, V = torch.pca_lowrank(Y, q = latent_dim)
     return torch.matmul(Y, V[:,:latent_dim])
 
 latent_dim = 2
-
-plt.figure(figsize=(20, 6))
-
 idx2plot = np.random.default_rng(seed).choice(n_samples, size=500, replace=False)
 X = _pca(Y, latent_dim)[idx2plot]
 colors = t[idx2plot]
@@ -50,4 +47,4 @@ plt.axis('square')
 plt.xlabel('Principal dim 1', fontsize=18)
 plt.ylabel('Principal dim 2', fontsize=18)
 plt.tick_params(axis='both', which='major', labelsize=14)
-plt.savefig(os.path.join('./results',dataset+'_pca.png'),bbox_inches='tight')
+plt.savefig(os.path.join('./results_'+dataset,dataset+'_pca.png'),bbox_inches='tight')

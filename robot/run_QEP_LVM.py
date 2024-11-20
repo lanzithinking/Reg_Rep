@@ -4,10 +4,9 @@ import os
 import random
 import numpy as np
 import matplotlib.pylab as plt
-import urllib.request
-import tarfile
 
 import torch
+from torch.utils.data import TensorDataset, DataLoader
 import tqdm
 
 # gpytorch imports
@@ -35,21 +34,17 @@ torch.cuda.manual_seed_all(seed)
 # set device
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-POWER = torch.tensor(1.5, device=device)
+q = 2.0
+POWER = torch.tensor(q, device=device)
 
-# load data
-if not (os.path.exists('DataTrn.txt') and os.path.exists('DataTrnLbls.txt')):
-    # download data
-    url = "http://staffwww.dcs.shef.ac.uk/people/N.Lawrence/resources/3PhData.tar.gz"
-    urllib.request.urlretrieve(url, '3PhData.tar.gz')
-    with tarfile.open('3PhData.tar.gz', 'r') as f:
-        f.extract('DataTrn.txt')
-        f.extract('DataTrnLbls.txt')
-
-Y = torch.Tensor(np.loadtxt(fname='DataTrn.txt'))
-labels = torch.Tensor(np.loadtxt(fname='DataTrnLbls.txt'))
-labels = (labels @ np.diag([1, 2, 3])).sum(axis=1)
+# create data
+from load_data import *
+train, valid, test = load_weights()
+Y = torch.tensor(np.vstack((train, valid)))
+n_samples = Y.shape[0]
+train_dataset = TensorDataset(Y, torch.arange(n_samples))
 batch_size = 100
+train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 
 # define model
 def _init_pca(Y, latent_dim):
@@ -77,7 +72,7 @@ class bQEPLVM(BayesianQEPLVM):
 
         # Initialise X with PCA or randn
         if pca == True:
-             X_init = _init_pca(Y, latent_dim) # Initialise X to PCA
+             X_init = _init_pca(Y.float(), latent_dim) # Initialise X to PCA
         else:
              X_init = torch.nn.Parameter(torch.randn(n, latent_dim))
 
@@ -100,15 +95,16 @@ class bQEPLVM(BayesianQEPLVM):
         dist = MultivariateQExponential(mean_x, covar_x, power=self.power)
         return dist
 
-    def _get_batch_idx(self, batch_size):
+    def _get_batch_idx(self, batch_size, seed=None):
         valid_indices = np.arange(self.n)
-        batch_indices = np.random.choice(valid_indices, size=batch_size, replace=False)
+        batch_indices = np.random.choice(valid_indices, size=batch_size, replace=False) if seed is None else \
+                        np.random.default_rng(seed).choice(valid_indices, size=batch_size, replace=False)
         return np.sort(batch_indices)
 
 
 N = len(Y)
 data_dim = Y.shape[1]
-latent_dim = data_dim
+latent_dim = 10
 n_inducing = 25
 pca = False
 
@@ -129,12 +125,13 @@ optimizer = torch.optim.Adam([
 
 
 loss_list = []
-if os.path.exists(os.path.join('./results','oilflow_qeplvm_q'+str(POWER.cpu().item())+'_checkpoint.dat')):
-    state_dict = torch.load(os.path.join('./results','oilflow_qeplvm_q'+str(POWER.cpu().item())+'_checkpoint.dat'), map_location=device)['model']
+if os.path.exists(os.path.join('./results','robot_qeplvm_q'+str(POWER.cpu().item())+'_checkpoint.dat')):
+    state_dict = torch.load(os.path.join('./results', 'robot_qeplvm_q'+str(POWER.cpu().item())+'_checkpoint.dat'), map_location=device)['model']
 else:
     # set device
     model = model.to(device)
     likelihood = likelihood.to(device)
+    # mll = mll.to(device)
     
     # Training loop - optimises the objective wrt kernel hypers, variational params and inducing inputs
     # using the optimizer provided.
@@ -142,8 +139,10 @@ else:
     likelihood.train()
     
     os.makedirs('./results', exist_ok=True)
+    # loss_list = []
     num_epochs = 10000
     iterator = tqdm.tqdm(range(num_epochs), desc="Epoch")
+    # batch_size = 256
     for epoch in iterator:
         batch_index = model._get_batch_idx(batch_size)
         optimizer.zero_grad()
@@ -151,9 +150,19 @@ else:
         sample_batch = sample[batch_index]
         output_batch = model(sample_batch)
         loss = -mll(output_batch, Y[batch_index].to(device).T).sum()
-        # iterator.set_description('Loss: ' + str(float(np.round(loss.item(),2))) + ", iter no: " + str(i))
+        # minibatch_iter = tqdm.tqdm(train_loader, desc=f"(Epoch {epoch}) Minibatch")
+        # for data, target, batch_index in minibatch_iter:
+        #     if torch.cuda.is_available():
+        #         data = data.cuda()
+        #     optimizer.zero_grad()
+        #     sample = model.sample_latent_variable()
+        #     output_batch = model(sample[batch_index])
+        #     loss = -mll(output_batch, data.flatten(1).T).sum()
+        #     # loss_list.append(loss.item())
+        #     # iterator.set_description('Loss: ' + str(float(np.round(loss.item(),2))) + ", iter no: " + str(i))
         loss.backward()
         optimizer.step()
+            # minibatch_iter.set_postfix(loss=loss.item())
         loss_list.append(loss.item())
         if epoch==0:
             min_loss = loss_list[-1]
@@ -168,67 +177,63 @@ else:
     # save the model
     state_dict = optim_model#.state_dict()
     likelihood_state_dict = optim_likelihood#.state_dict()
-    torch.save({'model': state_dict, 'likelihood': likelihood_state_dict}, os.path.join('./results','oilflow_qeplvm_q'+str(POWER.cpu().item())+'_checkpoint.dat'))
+    torch.save({'model': state_dict, 'likelihood': likelihood_state_dict}, os.path.join('./results','robot_qeplvm_q'+str(POWER.cpu().item())+'_checkpoint.dat'))
 
 # load the best model
 model.load_state_dict(state_dict)
 model.eval()
-
 # plot results
 inv_lengthscale = 1 / model.covar_module.base_kernel.lengthscale
 values, indices = torch.topk(model.covar_module.base_kernel.lengthscale, k=2,largest=False)
 l1, l2 = indices.detach().cpu().numpy().flatten()[:2]
-X = model.X.q_mu.detach().cpu().numpy()
-std = torch.nn.functional.softplus(model.X.q_log_sigma).cpu().detach().numpy()
-labels = labels.numpy()
 
-# plot
-import matplotlib.colors as mcolors
-colors = list(mcolors.TABLEAU_COLORS.values())
+idx2plot = model._get_batch_idx(500, seed)
+X = (model.X.q_mu if hasattr(model.X, 'q_mu') else model.X.X).detach().cpu().numpy()[idx2plot]
 
+# # plot
 # plt.figure(figsize=(20, 6))
 # plt.subplot(131)
-# # Select index of the smallest lengthscales by examining model.covar_module.base_kernel.lengthscales
-# for i, label in enumerate(np.unique(labels)):
-#     X_i = X[labels == label]
-#     scale_i = std[labels == label]
-#     plt.scatter(X_i[:, l1], X_i[:, l2], c=[colors[i]], label=label)
-#     plt.errorbar(X_i[:, l1], X_i[:, l2], xerr=scale_i[:,l1], yerr=scale_i[:,l2], label=label,c=colors[i], fmt='none')
-# plt.title('2d latent subspace', fontsize=20)# corresponding to 3 phase oilflow')
+# plt.scatter(X[:, l1], X[:, l2], alpha=0.8)
+# # plt.xlim([-1,1]); plt.ylim([-1,1])
+# plt.title('2d latent subspace', fontsize=20)
 # plt.xlabel('Latent dim 1', fontsize=20)
 # plt.ylabel('Latent dim 2', fontsize=20)
 # plt.tick_params(axis='both', which='major', labelsize=14)
 # plt.subplot(132)
 # plt.bar(np.arange(latent_dim), height=inv_lengthscale.detach().cpu().numpy().flatten())
-# plt.title('Inverse Lengthscale of kernel', fontsize=20)
+# plt.title('Inverse Lengthscale of SE-ARD kernel', fontsize=18)
 # plt.tick_params(axis='both', which='major', labelsize=14)
 # plt.subplot(133)
-# plt.plot(loss_list, label='batch_size=100')
+# plt.plot(loss_list, label='batch_size='+str(batch_size))
 # plt.title('Neg. ELBO Loss', fontsize=20)
 # plt.tick_params(axis='both', which='major', labelsize=14)
 # # plt.show()
-# plt.savefig(os.path.join('./results','./oilflow_QEP-LVM_q'+str(POWER.cpu().item())+'.png'),bbox_inches='tight')
+# os.makedirs('./results', exist_ok=True)
+# plt.savefig(os.path.join('./results','robot_QEP-LVM_q'+str(q)+'.png'),bbox_inches='tight')
+#
+# fig = plt.figure(figsize=(7, 6))
+# plt.scatter(X[:, l1], X[:, l2], alpha=0.8)
+# plt.title('q = '+str(q)+(' (Gaussian)' if q==2 else ''), fontsize=20)
+# # plt.axis('square')
+# plt.xlabel('Latent dim 1', fontsize=18)
+# plt.ylabel('Latent dim 2', fontsize=18)
+# plt.tick_params(axis='both', which='major', labelsize=14)
+# plt.savefig(os.path.join('./results','robot_latent_QEP-LVM_q'+str(q)+'.png'),bbox_inches='tight')
+#
+# fig = plt.figure(figsize=(7, 6))
+# plt.bar(np.arange(latent_dim), height=inv_lengthscale.detach().cpu().numpy().flatten())
+# plt.title('Inverse Lengthscale of kernel', fontsize=20)
+# plt.ylabel(' ', fontsize=18)
+# plt.tick_params(axis='both', which='major', labelsize=14)
+# plt.savefig(os.path.join('./results','robot_latdim_QEP-LVM_q'+str(q)+'.png'),bbox_inches='tight')
 
-plt.figure(figsize=(7, 6))
-# plt.contourf(X[:,l1], X[:,l2], 1/np.maximum(std[:,l1], std[:,[l2]]), cmap='gray', alpha=0.5)
-plt.contourf(X[:,l1], X[:,l2], np.sqrt(std[:,[l1]]**2 + std[:,l2]**2), cmap='gray', alpha=0.5)
-for i, label in enumerate(np.unique(labels)):
-    X_i = X[labels == label]
-    scale_i = std[labels == label]
-    plt.scatter(X_i[:, l1], X_i[:, l2], c=[colors[i]], label=label)
-# import pandas as pd
-# import seaborn as sns
-# dat2plot = pd.DataFrame(np.hstack((X[:,[l1,l2]],std[:,[l1,l2]], labels[:,None])),columns=['latdim_'+str(j) for j in range(2)]+['stddim_'+str(j) for j in range(2)]+['label'])
-# dat2plot['label']=dat2plot['label'].astype(int)
-# sns.relplot(data=dat2plot, x='latdim_0', y='latdim_1', hue='label', style='label', palette=colors[:len(np.unique(labels))], legend=False)
-plt.title('q = '+str(POWER.cpu().item())+(' (Gaussian)' if POWER.cpu().item()==2 else ''), fontsize=25)
+# plot latent space
+fig = plt.figure(figsize=(7,6))
+from sklearn.manifold import TSNE
+model_tsne = TSNE(n_components=2, random_state=seed)
+Z_ = model_tsne.fit_transform(X)
+plt.scatter(Z_[:, 0], Z_[:, 1])
+plt.title('q = '+str(q)+(' (Gaussian)' if q==2 else ''), fontsize=20)
 plt.xlabel('Latent dim 1', fontsize=20)
 plt.ylabel('Latent dim 2', fontsize=20)
-plt.tick_params(axis='both', which='major', labelsize=15)
-plt.savefig(os.path.join('./results','./oilflow_latent_QEP-LVM_q'+str(POWER.cpu().item())+'.png'),bbox_inches='tight')
-
-plt.figure(figsize=(7, 6))
-plt.bar(np.arange(latent_dim), height=inv_lengthscale.detach().cpu().numpy().flatten())
-plt.title('Inverse Lengthscale of kernel', fontsize=25)
-plt.tick_params(axis='both', which='major', labelsize=15)
-plt.savefig(os.path.join('./results','./oilflow_latdim_QEP-LVM_q'+str(POWER.cpu().item())+'.png'),bbox_inches='tight')
+plt.savefig(os.path.join('./results','robot_QEP-LVM_q'+str(q)+'_latent.png'),bbox_inches='tight')

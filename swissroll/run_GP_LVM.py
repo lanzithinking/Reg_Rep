@@ -121,8 +121,8 @@ optimizer = torch.optim.Adam([
 ], lr=0.01)
 
 loss_list = []
-if os.path.exists(os.path.join('./results',dataset+'_gplvm_checkpoint.dat')):
-    state_dict = torch.load(os.path.join('./results',dataset+'_gplvm_checkpoint.dat'), map_location=device)['model']
+if os.path.exists(os.path.join('./results_'+dataset,dataset+'_gplvm_checkpoint.dat')):
+    state_dict = torch.load(os.path.join('./results_'+dataset,dataset+'_gplvm_checkpoint.dat'), map_location=device)['model']
 else:
     # set device
     model = model.to(device)
@@ -133,6 +133,7 @@ else:
     model.train()
     likelihood.train()
     
+    os.makedirs('./results_'+dataset, exist_ok=True)
     # loss_list = []
     num_epochs = 10000
     iterator = tqdm.tqdm(range(num_epochs), desc="Epoch")
@@ -172,7 +173,7 @@ else:
     # save the model
     state_dict = optim_model#.state_dict()
     likelihood_state_dict = optim_likelihood#.state_dict()
-    torch.save({'model': state_dict, 'likelihood': likelihood_state_dict}, os.path.join('./results',dataset+'_gplvm_checkpoint.dat'))
+    torch.save({'model': state_dict, 'likelihood': likelihood_state_dict}, os.path.join('./results_'+dataset,dataset+'_gplvm_checkpoint.dat'))
 
 # load the best model
 model.load_state_dict(state_dict)
@@ -205,5 +206,5 @@ plt.plot(loss_list, label='batch_size='+str(batch_size))
 plt.title('Neg. ELBO Loss', fontsize=20)
 plt.tick_params(axis='both', which='major', labelsize=14)
 # plt.show()
-os.makedirs('./results', exist_ok=True)
-plt.savefig(os.path.join('./results',dataset+'_GP-LVM.png'),bbox_inches='tight')
+os.makedirs('./results_'+dataset, exist_ok=True)
+plt.savefig(os.path.join('./results_'+dataset,dataset+'_GP-LVM.png'),bbox_inches='tight')

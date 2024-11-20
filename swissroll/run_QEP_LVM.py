@@ -35,11 +35,11 @@ torch.cuda.manual_seed_all(seed)
 # set device
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-q = 1.0
+q = 2.0
 POWER = torch.tensor(q, device=device)
 
 # create data
-dataset = {0:'swissroll',1:'swisshole'}[1]
+dataset = {0:'swissroll',1:'swisshole'}[0]
 n_samples = 1000
 sr_points, sr_color = make_swiss_roll(n_samples=n_samples, noise=0.05, random_state=0, hole='hole' in dataset)
 Y, t = torch.tensor(sr_points), torch.tensor(sr_color)
@@ -126,8 +126,8 @@ optimizer = torch.optim.Adam([
 
 
 loss_list = []
-if os.path.exists(os.path.join('./results',dataset+'_qeplvm_q'+str(POWER.cpu().item())+'_checkpoint.dat')):
-    state_dict = torch.load(os.path.join('./results',dataset+'_qeplvm_q'+str(POWER.cpu().item())+'_checkpoint.dat'), map_location=device)['model']
+if os.path.exists(os.path.join('./results_'+dataset,dataset+'_qeplvm_q'+str(POWER.cpu().item())+'_checkpoint.dat')):
+    state_dict = torch.load(os.path.join('./results_'+dataset,dataset+'_qeplvm_q'+str(POWER.cpu().item())+'_checkpoint.dat'), map_location=device)['model']
 else:
     # set device
     model = model.to(device)
@@ -139,6 +139,7 @@ else:
     model.train()
     likelihood.train()
     
+    os.makedirs('./results_'+dataset, exist_ok=True)
     # loss_list = []
     num_epochs = 10000
     iterator = tqdm.tqdm(range(num_epochs), desc="Epoch")
@@ -177,7 +178,7 @@ else:
     # save the model
     state_dict = optim_model#.state_dict()
     likelihood_state_dict = optim_likelihood#.state_dict()
-    torch.save({'model': state_dict, 'likelihood': likelihood_state_dict}, os.path.join('./results',dataset+'_qeplvm_q'+str(POWER.cpu().item())+'_checkpoint.dat'))
+    torch.save({'model': state_dict, 'likelihood': likelihood_state_dict}, os.path.join('./results_'+dataset,dataset+'_qeplvm_q'+str(POWER.cpu().item())+'_checkpoint.dat'))
 
 # load the best model
 model.load_state_dict(state_dict)
@@ -209,21 +210,21 @@ plt.plot(loss_list, label='batch_size='+str(batch_size))
 plt.title('Neg. ELBO Loss', fontsize=20)
 plt.tick_params(axis='both', which='major', labelsize=14)
 # plt.show()
-os.makedirs('./results', exist_ok=True)
-plt.savefig(os.path.join('./results',dataset+'_QEP-LVM_q'+str(q)+'.png'),bbox_inches='tight')
+os.makedirs('./results_'+dataset, exist_ok=True)
+plt.savefig(os.path.join('./results_'+dataset,dataset+'_QEP-LVM_q'+str(q)+'.png'),bbox_inches='tight')
 
 fig = plt.figure(figsize=(7, 6))
 plt.scatter(X[:, l1], X[:, l2], c=colors, alpha=0.8)
-plt.title('q = '+str(q)+(' (Gaussian)' if q==2 else ''), fontsize=20)
+plt.title('q = '+str(q)+(' (Gaussian)' if q==2 else ''), fontsize=25)
 # plt.axis('square')
-plt.xlabel('Latent dim 1', fontsize=18)
-plt.ylabel('Latent dim 2', fontsize=18)
-plt.tick_params(axis='both', which='major', labelsize=14)
-plt.savefig(os.path.join('./results',dataset+'_latent_QEP-LVM_q'+str(q)+'.png'),bbox_inches='tight')
+plt.xlabel('Latent dim 1', fontsize=20)
+plt.ylabel('Latent dim 2', fontsize=20)
+plt.tick_params(axis='both', which='major', labelsize=15)
+plt.savefig(os.path.join('./results_'+dataset,dataset+'_latent_QEP-LVM_q'+str(q)+'.png'),bbox_inches='tight')
 
 fig = plt.figure(figsize=(7, 6))
 plt.bar(np.arange(latent_dim), height=inv_lengthscale.detach().cpu().numpy().flatten())
-plt.title('Inverse Lengthscale of kernel', fontsize=20)
+plt.title('Inverse Lengthscale of kernel', fontsize=25)
 plt.ylabel(' ', fontsize=18)
-plt.tick_params(axis='both', which='major', labelsize=14)
-plt.savefig(os.path.join('./results',dataset+'_latdim_QEP-LVM_q'+str(q)+'.png'),bbox_inches='tight')
+plt.tick_params(axis='both', which='major', labelsize=15)
+plt.savefig(os.path.join('./results_'+dataset,dataset+'_latdim_QEP-LVM_q'+str(q)+'.png'),bbox_inches='tight')

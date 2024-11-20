@@ -31,7 +31,8 @@ from gpytorch.distributions import MultivariateQExponential
 # set device
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-POWER = torch.tensor(0.5, device=device)
+q = 1.5
+POWER = torch.tensor(q, device=device)
 
 # define model
 def _init_pca(Y, latent_dim):
@@ -40,7 +41,7 @@ def _init_pca(Y, latent_dim):
 
 class bQEPLVM(BayesianQEPLVM):
     def __init__(self, n, data_dim, latent_dim, n_inducing, **kwargs):
-        self.power = torch.tensor(POWER)
+        self.power = POWER
         self.n = n
         self.batch_shape = torch.Size([data_dim])
 
@@ -101,7 +102,7 @@ def train_QEPLVM(Y, latent_dim=None, n_inducing=25, batch_size=100, num_epochs=1
         model.X.q_log_sigma = kwargs.pop('X_S_init')
     
     # Likelihood
-    likelihood = QExponentialLikelihood(batch_shape=model.batch_shape, power=torch.tensor(POWER))
+    likelihood = QExponentialLikelihood(batch_shape=model.batch_shape, power=POWER)
     
     # Declaring the objective to be optimised along with optimiser
     # (see models/latent_variable.py for how the additional loss terms are accounted for)
@@ -110,16 +111,17 @@ def train_QEPLVM(Y, latent_dim=None, n_inducing=25, batch_size=100, num_epochs=1
     optimizer = torch.optim.Adam([
         {'params': model.parameters()},
         {'params': likelihood.parameters()}
-    ], lr={2.0:0.01, 1.0:0.005, 1.5: 0.015, 0.5:1.0}[POWER.item()])
+    ], lr={2.0:0.01, 1.0:0.005, 1.5: 0.015, 0.5:1.0}[q])
     
     
     loss_list = []
-    f_name = 'mnist_qeplvm_q'+str(POWER.cpu().item())+'_class_'+kwargs.pop('class_','full')+'_checkpoint.dat'
-    if os.path.exists(os.path.join('./results',f_name)):
-        state_dict = torch.load(os.path.join('./results',f_name), map_location=device)
+    f_name = 'mnist_qeplvm_q'+str(q)+'_class_'+kwargs.pop('class_','full')+'_checkpoint_seed'+str(kwargs.pop('seed',2024))+'.dat'
+    if os.path.exists(os.path.join('./results/cls',f_name)):
+        state_dict = torch.load(os.path.join('./results/cls',f_name), map_location=device)
         # load the best model
         model.load_state_dict(state_dict['model'])
         likelihood.load_state_dict(state_dict['likelihood'])
+        min_loss = state_dict['loss']
     else:
         # set device
         model = model.to(device)
@@ -130,7 +132,7 @@ def train_QEPLVM(Y, latent_dim=None, n_inducing=25, batch_size=100, num_epochs=1
         model.train()
         likelihood.train()
         
-        os.makedirs('./results', exist_ok=True)
+        os.makedirs('./results/cls', exist_ok=True)
         # num_epochs = 10000
         iterator = tqdm.tqdm(range(num_epochs), desc="Epoch")
         for epoch in iterator:
@@ -162,7 +164,7 @@ def train_QEPLVM(Y, latent_dim=None, n_inducing=25, batch_size=100, num_epochs=1
             # save the model
             model_state_dict = optim_model#.state_dict()
             likelihood_state_dict = optim_likelihood#.state_dict()
-            torch.save({'model': model_state_dict, 'likelihood': likelihood_state_dict}, os.path.join('./results',f_name))
+            torch.save({'model': model_state_dict, 'likelihood': likelihood_state_dict, 'loss': min_loss}, os.path.join('./results/cls',f_name))
     # ready for evaluation
     model.eval()
     likelihood.eval()
@@ -220,14 +222,15 @@ def main(seed=2024):
     test_size = min(batch_size,n_test)
     log_predprob = torch.zeros((n_class, test_size))
     loss = np.zeros((n_class, 2))
+    time_ = 0
     for k in torch.unique(labels_train):
         # model based on training data
         Y_train_k = Y_train[labels_train==k]
         X_init = torch.nn.Parameter(torch.randn(Y_train_k.shape[0], latent_dim))#_init_pca(Y_train_k, latent_dim)
         beginning=timeit.default_timer()
         model_train, likelihood_train, loss[k.int()][0] = train_QEPLVM(Y_train_k, latent_dim, n_inducing=n_inducing, batch_size=batch_size, num_epochs=num_epochs, 
-                                                                       save_model=False, class_=str(k.cpu().item())+'train', X_init=X_init)
-        time_ = timeit.default_timer()-beginning
+                                                                       save_model=False, class_=str(k.cpu().item())+'train', X_init=X_init, seed=seed)
+        time_ += timeit.default_timer()-beginning
         sample = model_train.sample_latent_variable()
         batch_idx = model_train._get_batch_idx(min(batch_size, Y_train_k.shape[0]), seed)
         mll = VariationalELBO(likelihood_train, model_train, num_data=model_train.n)
@@ -246,7 +249,7 @@ def main(seed=2024):
         beginning=timeit.default_timer()
         model_full, likelihood_full, loss[k.int()][1] = train_QEPLVM(Y_full, latent_dim, n_inducing=n_inducing, batch_size=batch_size, num_epochs=num_epochs, 
                                                                      save_model=False, class_=str(k.cpu().item())+'full', X_init=X_init, X_S_init=X_S_init, 
-                                                                     fix_param=fix_param)
+                                                                     fix_param=fix_param, seed=seed)
         time_ += timeit.default_timer()-beginning
         # sample_ = sample.clone()
         sample = model_full.sample_latent_variable()
@@ -275,16 +278,21 @@ def main(seed=2024):
         AUC = roc_auc_score(labels_test[batch_test].cpu(), t_score.detach().cpu(), multi_class='ovo')
     else:
         AUC = roc_auc_score(labels_test[batch_test].cpu(), t_score.detach().cpu())
+    from sklearn.metrics import adjusted_rand_score, normalized_mutual_info_score
+    ARI = adjusted_rand_score(labels_test[batch_test].cpu(), pred)
+    NMI = normalized_mutual_info_score(labels_test[batch_test].cpu(), pred)
     print('Test Accuracy: {}%'.format(100. * ACC))
     print('Test AUC: {}'.format(AUC))
+    print('Test ARI: {}'.format(ARI))
+    print('Test NMI: {}'.format(NMI))
     print('Test LPP: {}'.format(LPP))
     
     # save to file
     os.makedirs('./results', exist_ok=True)
-    stats = np.array([ACC, AUC, LPP, time_])
-    stats = np.array([seed,'q='+str(POWER.cpu().item())]+[np.array2string(r, precision=4) for r in stats])[None,:]
-    header = ['seed', 'Method', 'ACC', 'AUC', 'LPP', 'time']
-    f_name = os.path.join('./results','oilflow_latdim_QEP-LVM.txt')
+    stats = np.array([ACC, AUC, ARI, NMI, LPP, time_])
+    stats = np.array([seed,'q='+str(q)]+[np.array2string(r, precision=4) for r in stats])[None,:]
+    header = ['seed', 'Method', 'ACC', 'AUC', 'ARI', 'NMI', 'LPP', 'time']
+    f_name = os.path.join('./results','mnist_latdim_QEP-LVM.txt')
     with open(f_name,'ab') as f:
         np.savetxt(f,stats,fmt="%s",delimiter=',',header=','.join(header) if seed==2024 else '')
 
